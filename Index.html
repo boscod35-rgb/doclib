@@ -1,0 +1,1433 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Document Library</title>
+
+<!-- =========================================================================
+  DOCUMENT LIBRARY — standalone module (Phase 1: browse + preview)
+  Single-file build for easy embedding into a host application's ribbon/tab.
+  Conceptual internal structure (all in this file, clearly regioned so it can
+  be split into separate files/components later without re-architecting):
+
+    /documents
+      documentLibrary.html/css/js   → this file (shell + all UI panes)
+      config.js                     → CONFIG block, top of <script>
+      googleAuth.js                 → GoogleAuth module
+      googleDriveService.js         → GoogleDriveService module
+      documentPreviewService.js     → PreviewService module
+      documentLibraryDB.js          → DocumentLibraryDB module
+      FolderTree / FileList / PreviewPane / ExpandedPreview → UI render fns
+
+  To embed into a host app: lift the <style> into the host's stylesheet
+  (or scope it under one wrapper class), and mount the markup inside a
+  "Documents" tab/panel in the host's existing ribbon. The JS modules below
+  have no dependency on anything outside this file.
+========================================================================= -->
+
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+
+<style>
+  /* ---------------------------------------------------------------------
+     DESIGN TOKENS
+     Enterprise document-workspace look: quiet neutral surfaces, one
+     working accent (indigo) for actions/selection, a muted teal for
+     "connected/live" state, amber for warnings. Monospace reserved for
+     file metadata (sizes, dates, IDs) to read like a real file browser.
+  --------------------------------------------------------------------- */
+  :root{
+    --dl-bg: #f5f6f8;
+    --dl-surface: #ffffff;
+    --dl-surface-sunken: #fafbfc;
+    --dl-border: #e1e4ea;
+    --dl-border-strong: #cdd2db;
+    --dl-text: #1b1f24;
+    --dl-text-muted: #6b7280;
+    --dl-text-faint: #9aa1ac;
+    --dl-accent: #3454d1;
+    --dl-accent-hover: #2c46b3;
+    --dl-accent-soft: #eaeefb;
+    --dl-live: #0f9d8f;
+    --dl-live-soft: #e3f5f3;
+    --dl-warn: #d97706;
+    --dl-warn-soft: #fdf1e0;
+    --dl-danger: #c53030;
+    --dl-danger-soft: #fbeaea;
+    --dl-radius: 6px;
+    --dl-radius-lg: 10px;
+    --dl-font: -apple-system, "Inter", "Segoe UI", Helvetica, Arial, sans-serif;
+    --dl-mono: "IBM Plex Mono", "SFMono-Regular", Consolas, monospace;
+    --dl-shadow: 0 1px 2px rgba(20,22,28,0.04), 0 4px 10px rgba(20,22,28,0.05);
+    --dl-shadow-lg: 0 10px 30px rgba(20,22,28,0.18);
+  }
+
+  .dl-root, .dl-root *{ box-sizing:border-box; }
+  .dl-root{
+    font-family:var(--dl-font);
+    color:var(--dl-text);
+    background:var(--dl-bg);
+    width:100%;
+    height:100%;
+    min-height:640px;
+    display:flex;
+    flex-direction:column;
+    font-size:13.5px;
+    line-height:1.45;
+  }
+  .dl-root button{ font-family:inherit; font-size:inherit; }
+  .dl-root ::selection{ background:var(--dl-accent-soft); }
+
+  /* Scrollbars */
+  .dl-scroll{ overflow-y:auto; }
+  .dl-scroll::-webkit-scrollbar{ width:9px; height:9px; }
+  .dl-scroll::-webkit-scrollbar-track{ background:transparent; }
+  .dl-scroll::-webkit-scrollbar-thumb{ background:var(--dl-border-strong); border-radius:99px; border:2px solid transparent; background-clip:content-box; }
+  .dl-scroll::-webkit-scrollbar-thumb:hover{ background:#a9b0bc; background-clip:content-box; }
+
+  /* -------------------------- Toolbar -------------------------- */
+  .dl-toolbar{
+    display:flex; align-items:center; gap:12px;
+    padding:10px 14px;
+    background:var(--dl-surface);
+    border-bottom:1px solid var(--dl-border);
+    flex:0 0 auto;
+  }
+  .dl-toolbar-title{ font-weight:600; font-size:14.5px; letter-spacing:-0.01em; display:flex; align-items:center; gap:8px; }
+  .dl-toolbar-title svg{ flex:none; }
+  .dl-toolbar-spacer{ flex:1 1 auto; }
+
+  .dl-conn-pill{
+    display:flex; align-items:center; gap:7px;
+    padding:5px 10px 5px 8px;
+    border-radius:99px;
+    border:1px solid var(--dl-border);
+    background:var(--dl-surface-sunken);
+    font-size:12.5px;
+    color:var(--dl-text-muted);
+  }
+  .dl-conn-dot{ width:7px; height:7px; border-radius:50%; background:var(--dl-text-faint); flex:none; }
+  .dl-conn-pill.is-connected{ border-color:#bfe8e2; background:var(--dl-live-soft); color:#0b6e63; }
+  .dl-conn-pill.is-connected .dl-conn-dot{ background:var(--dl-live); box-shadow:0 0 0 3px rgba(15,157,143,0.18); }
+  .dl-conn-pill.is-error{ border-color:#f2c9a6; background:var(--dl-warn-soft); color:#8a5416; }
+  .dl-conn-pill.is-error .dl-conn-dot{ background:var(--dl-warn); }
+  .dl-conn-pill.is-busy .dl-conn-dot{ animation: dl-pulse 1.1s ease-in-out infinite; }
+  @keyframes dl-pulse{ 0%,100%{ opacity:1; } 50%{ opacity:.35; } }
+
+  .dl-btn{
+    display:inline-flex; align-items:center; gap:6px;
+    padding:6px 12px;
+    border-radius:var(--dl-radius);
+    border:1px solid var(--dl-border-strong);
+    background:var(--dl-surface);
+    color:var(--dl-text);
+    cursor:pointer;
+    font-weight:500;
+    transition:background .12s ease, border-color .12s ease, box-shadow .12s ease;
+  }
+  .dl-btn:hover{ background:#f2f3f5; }
+  .dl-btn:active{ transform:translateY(0.5px); }
+  .dl-btn:disabled{ opacity:.5; cursor:not-allowed; }
+  .dl-btn-primary{ background:var(--dl-accent); border-color:var(--dl-accent); color:#fff; }
+  .dl-btn-primary:hover{ background:var(--dl-accent-hover); border-color:var(--dl-accent-hover); }
+  .dl-btn-ghost{ border-color:transparent; background:transparent; }
+  .dl-btn-ghost:hover{ background:#f0f1f3; }
+  .dl-btn-icon{ padding:6px; width:30px; height:30px; justify-content:center; }
+  .dl-btn-sm{ padding:4px 9px; font-size:12px; }
+
+  /* -------------------------- Workspace / panes -------------------------- */
+  .dl-workspace{ flex:1 1 auto; display:flex; min-height:0; position:relative; }
+
+  .dl-pane{ display:flex; flex-direction:column; min-width:0; background:var(--dl-surface); }
+  .dl-pane + .dl-pane{ border-left:1px solid var(--dl-border); }
+
+  .dl-pane-tree{ flex:0 0 auto; width:24%; min-width:190px; max-width:440px; background:var(--dl-surface-sunken); }
+  .dl-pane-list{ flex:0 0 auto; width:42%; min-width:280px; }
+  .dl-pane-preview{ flex:1 1 auto; min-width:260px; }
+
+  .dl-pane.is-collapsed{ width:0 !important; min-width:0; overflow:hidden; border-left:none; }
+
+  .dl-splitter{
+    flex:0 0 auto; width:5px; margin:0 -2.5px; cursor:col-resize;
+    background:transparent; position:relative; z-index:5;
+  }
+  .dl-splitter:hover, .dl-splitter.is-dragging{ background:var(--dl-accent-soft); }
+  .dl-splitter::after{ content:""; position:absolute; top:0; bottom:0; left:50%; width:1px; background:var(--dl-border); }
+
+  .dl-pane-header{
+    flex:0 0 auto; display:flex; align-items:center; gap:8px;
+    padding:9px 12px; border-bottom:1px solid var(--dl-border);
+    font-size:11.5px; font-weight:600; text-transform:uppercase; letter-spacing:.05em;
+    color:var(--dl-text-muted);
+    min-height:38px;
+  }
+  .dl-pane-header .dl-toolbar-spacer{ flex:1; }
+  .dl-pane-body{ flex:1 1 auto; min-height:0; display:flex; flex-direction:column; }
+
+  /* -------------------------- Folder tree -------------------------- */
+  .dl-tree{ padding:6px; flex:1; }
+  .dl-tree-node{ user-select:none; }
+  .dl-tree-row{
+    display:flex; align-items:center; gap:5px;
+    padding:5px 6px; border-radius:var(--dl-radius);
+    cursor:pointer; color:var(--dl-text); white-space:nowrap;
+  }
+  .dl-tree-row:hover{ background:#eef0f3; }
+  .dl-tree-row.is-selected{ background:var(--dl-accent-soft); color:var(--dl-accent-hover); font-weight:600; }
+  .dl-tree-caret{
+    width:15px; height:15px; flex:none; display:flex; align-items:center; justify-content:center;
+    color:var(--dl-text-faint); transition:transform .12s ease; cursor:pointer;
+  }
+  .dl-tree-caret.is-expanded{ transform:rotate(90deg); }
+  .dl-tree-caret.is-empty{ visibility:hidden; }
+  .dl-tree-icon{ flex:none; display:flex; }
+  .dl-tree-label{ overflow:hidden; text-overflow:ellipsis; font-size:13px; }
+  .dl-tree-children{ margin-left:17px; border-left:1px dashed var(--dl-border-strong); padding-left:2px; }
+  .dl-tree-loading{ display:flex; align-items:center; gap:6px; padding:5px 6px 5px 24px; color:var(--dl-text-faint); font-size:12px; }
+
+  /* -------------------------- Middle pane: toolbar/breadcrumb -------------------------- */
+  .dl-breadcrumb{
+    display:flex; align-items:center; flex-wrap:wrap; gap:2px;
+    padding:9px 12px; border-bottom:1px solid var(--dl-border);
+    font-size:12.5px; color:var(--dl-text-muted);
+  }
+  .dl-crumb{ cursor:pointer; padding:2px 5px; border-radius:4px; }
+  .dl-crumb:hover{ background:#eef0f3; color:var(--dl-text); }
+  .dl-crumb.is-current{ color:var(--dl-text); font-weight:600; cursor:default; }
+  .dl-crumb.is-current:hover{ background:none; }
+  .dl-crumb-sep{ color:var(--dl-text-faint); padding:0 1px; }
+
+  .dl-list-toolbar{ display:flex; align-items:center; gap:8px; padding:8px 12px; border-bottom:1px solid var(--dl-border); }
+  .dl-search{
+    flex:1 1 auto; display:flex; align-items:center; gap:6px;
+    padding:5px 9px; border:1px solid var(--dl-border-strong); border-radius:var(--dl-radius);
+    background:var(--dl-surface-sunken); color:var(--dl-text-muted);
+  }
+  .dl-search input{ border:none; outline:none; background:transparent; flex:1; color:var(--dl-text); font-size:12.5px; }
+  .dl-search svg{ flex:none; }
+
+  .dl-table{ width:100%; border-collapse:collapse; font-size:13px; }
+  .dl-table thead th{
+    position:sticky; top:0; background:var(--dl-surface); z-index:1;
+    text-align:left; font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.04em;
+    color:var(--dl-text-muted); padding:7px 10px; border-bottom:1px solid var(--dl-border);
+    cursor:pointer; white-space:nowrap;
+  }
+  .dl-table thead th:hover{ color:var(--dl-text); }
+  .dl-table thead th .dl-sort-arrow{ margin-left:4px; opacity:.6; font-size:10px; }
+  .dl-table tbody tr{ cursor:pointer; }
+  .dl-table tbody tr:hover{ background:#f5f6f8; }
+  .dl-table tbody tr.is-selected{ background:var(--dl-accent-soft); }
+  .dl-table td{ padding:6px 10px; border-bottom:1px solid #eef0f3; white-space:nowrap; }
+  .dl-cell-name{ display:flex; align-items:center; gap:8px; max-width:1px; width:100%; }
+  .dl-cell-name span{ overflow:hidden; text-overflow:ellipsis; }
+  .dl-cell-meta{ color:var(--dl-text-muted); font-family:var(--dl-mono); font-size:11.5px; }
+
+  /* -------------------------- Preview pane -------------------------- */
+  .dl-preview-header{
+    display:flex; align-items:center; gap:8px; padding:9px 12px;
+    border-bottom:1px solid var(--dl-border); min-height:38px;
+  }
+  .dl-preview-title{ font-weight:600; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1 1 auto; min-width:0; }
+  .dl-preview-actions{ display:flex; align-items:center; gap:4px; flex:none; }
+  .dl-preview-body{ flex:1 1 auto; min-height:0; display:flex; flex-direction:column; background:var(--dl-surface-sunken); }
+  .dl-preview-surface{ flex:1; min-height:0; display:flex; align-items:center; justify-content:center; overflow:auto; padding:16px; }
+  .dl-preview-surface img{ max-width:100%; max-height:100%; border-radius:4px; box-shadow:var(--dl-shadow); background:#fff; }
+  .dl-preview-surface iframe{ width:100%; height:100%; border:none; border-radius:4px; background:#fff; }
+  .dl-preview-surface pre{ width:100%; height:100%; margin:0; background:#fff; border-radius:4px; padding:14px; overflow:auto; font-family:var(--dl-mono); font-size:12px; border:1px solid var(--dl-border); }
+  .dl-preview-surface table.dl-csv{ border-collapse:collapse; background:#fff; border:1px solid var(--dl-border); border-radius:4px; overflow:hidden; font-size:12px; }
+  .dl-preview-surface table.dl-csv td{ padding:5px 9px; border-bottom:1px solid #eef0f3; border-right:1px solid #eef0f3; font-family:var(--dl-mono); }
+
+  .dl-tooltip-wrap{ position:relative; display:inline-flex; }
+  .dl-tooltip-wrap[data-tip]:hover::after{
+    content:attr(data-tip); position:absolute; bottom:calc(100% + 6px); left:50%; transform:translateX(-50%);
+    background:#1b1f24; color:#fff; font-size:11px; padding:4px 7px; border-radius:4px; white-space:nowrap; z-index:20;
+    box-shadow:var(--dl-shadow);
+  }
+  .dl-tooltip-wrap[data-tip]:hover::before{
+    content:""; position:absolute; bottom:calc(100% + 2px); left:50%; transform:translateX(-50%);
+    border:4px solid transparent; border-top-color:#1b1f24; z-index:20;
+  }
+
+  /* -------------------------- Empty / loading / error states -------------------------- */
+  .dl-state{
+    flex:1; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    gap:8px; padding:30px; text-align:center; color:var(--dl-text-muted);
+  }
+  .dl-state svg{ opacity:.55; }
+  .dl-state-title{ font-weight:600; color:var(--dl-text); font-size:13.5px; }
+  .dl-state-sub{ font-size:12.5px; color:var(--dl-text-muted); max-width:320px; }
+  .dl-state.is-error .dl-state-title{ color:var(--dl-danger); }
+  .dl-state.is-error svg{ color:var(--dl-danger); opacity:.8; }
+
+  .dl-spinner{
+    width:16px; height:16px; border-radius:50%;
+    border:2px solid var(--dl-border-strong); border-top-color:var(--dl-accent);
+    animation:dl-spin .7s linear infinite; flex:none;
+  }
+  @keyframes dl-spin{ to{ transform:rotate(360deg); } }
+  .dl-inline-loading{ display:flex; align-items:center; gap:8px; padding:10px 12px; color:var(--dl-text-muted); font-size:12.5px; }
+
+  .dl-metacard{ background:var(--dl-surface); border:1px solid var(--dl-border); border-radius:var(--dl-radius-lg); padding:22px; text-align:center; max-width:280px; box-shadow:var(--dl-shadow); }
+  .dl-metacard-icon{ margin-bottom:10px; }
+  .dl-metacard-name{ font-weight:600; font-size:13.5px; word-break:break-word; }
+  .dl-metacard-sub{ color:var(--dl-text-muted); font-size:12px; margin-top:4px; }
+  .dl-metacard .dl-btn{ margin-top:14px; }
+
+  /* -------------------------- Expanded / fullscreen preview -------------------------- */
+  .dl-expand-overlay{
+    position:absolute; inset:0; background:rgba(20,22,28,0.55);
+    display:flex; align-items:center; justify-content:center; z-index:50;
+    animation:dl-fade .12s ease;
+  }
+  @keyframes dl-fade{ from{ opacity:0; } to{ opacity:1; } }
+  .dl-expand-panel{
+    width:95%; height:95%; background:var(--dl-surface); border-radius:var(--dl-radius-lg);
+    box-shadow:var(--dl-shadow-lg); display:flex; flex-direction:column; overflow:hidden;
+  }
+  .dl-expand-header{ display:flex; align-items:center; gap:10px; padding:10px 14px; border-bottom:1px solid var(--dl-border); }
+  .dl-expand-title{ font-weight:600; font-size:14px; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .dl-expand-body{ flex:1; min-height:0; display:flex; background:var(--dl-surface-sunken); }
+
+  /* -------------------------- Connect screen -------------------------- */
+  .dl-connect-screen{ flex:1; display:flex; align-items:center; justify-content:center; }
+  .dl-connect-card{ text-align:center; max-width:360px; padding:12px; }
+  .dl-connect-card svg{ margin-bottom:14px; }
+  .dl-connect-card h2{ font-size:16px; margin:0 0 6px; letter-spacing:-0.01em; }
+  .dl-connect-card p{ font-size:13px; color:var(--dl-text-muted); margin:0 0 18px; line-height:1.55; }
+
+  .dl-visually-hidden{ position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
+  .dl-root [data-focus-visible-only]:focus{ outline:none; }
+  .dl-root button:focus-visible, .dl-root [tabindex]:focus-visible{ outline:2px solid var(--dl-accent); outline-offset:1px; }
+</style>
+</head>
+<body style="margin:0; height:100vh; background:var(--dl-bg,#f5f6f8);">
+
+<!-- =========================================================================
+     MARKUP SHELL
+     In a host app this whole <div class="dl-root"> mounts inside the
+     "Documents" tab content area, below the host's existing ribbon/nav —
+     which stays visible. Nothing here assumes it owns the full viewport.
+========================================================================= -->
+<div class="dl-root" id="dlRoot">
+
+  <!-- Toolbar -->
+  <div class="dl-toolbar">
+    <div class="dl-toolbar-title">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>
+      Document Library
+    </div>
+    <div class="dl-toolbar-spacer"></div>
+
+    <button class="dl-btn dl-btn-sm dl-btn-ghost" id="dlCollapseTreeBtn" title="Collapse folder tree">Collapse tree</button>
+    <button class="dl-btn dl-btn-sm dl-btn-ghost" id="dlCollapsePreviewBtn" title="Collapse preview">Collapse preview</button>
+
+    <div class="dl-conn-pill" id="dlConnPill">
+      <span class="dl-conn-dot" id="dlConnDot"></span>
+      <span id="dlConnLabel">Not connected</span>
+    </div>
+    <button class="dl-btn dl-btn-sm" id="dlRefreshBtn" title="Refresh from Google Drive" style="display:none;">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+      Refresh
+    </button>
+    <button class="dl-btn dl-btn-sm dl-btn-primary" id="dlConnectBtn">Connect Google Drive</button>
+    <button class="dl-btn dl-btn-sm" id="dlDisconnectBtn" style="display:none;">Disconnect</button>
+  </div>
+
+  <!-- Workspace: either the connect screen, or the 3-pane layout -->
+  <div class="dl-workspace" id="dlWorkspace">
+
+    <!-- Not-connected state -->
+    <div class="dl-connect-screen" id="dlConnectScreen">
+      <div class="dl-connect-card">
+        <svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="#9aa1ac" stroke-width="1.5"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>
+        <h2>No Google Drive connected</h2>
+        <p>Connect your Google Drive to browse folders and preview files here. Read-only access — nothing is uploaded, moved, or deleted in this version.</p>
+        <button class="dl-btn dl-btn-primary" id="dlConnectBtn2">Connect Google Drive</button>
+      </div>
+    </div>
+
+    <!-- Three-pane layout -->
+    <div class="dl-pane dl-pane-tree" id="dlPaneTree" style="display:none;">
+      <div class="dl-pane-header">Folders<div class="dl-toolbar-spacer"></div></div>
+      <div class="dl-pane-body dl-scroll" id="dlTreeBody">
+        <div class="dl-tree" id="dlTree"></div>
+      </div>
+    </div>
+    <div class="dl-splitter" id="dlSplitterA" style="display:none;"></div>
+
+    <div class="dl-pane dl-pane-list" id="dlPaneList" style="display:none;">
+      <div class="dl-breadcrumb" id="dlBreadcrumb"></div>
+      <div class="dl-list-toolbar">
+        <div class="dl-search">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
+          <input type="text" id="dlSearchInput" placeholder="Search this folder">
+        </div>
+        <div class="dl-tooltip-wrap" data-tip="Refresh folder">
+          <button class="dl-btn dl-btn-icon dl-btn-ghost" id="dlListRefreshBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v6h-6"/></svg>
+          </button>
+        </div>
+        <div class="dl-tooltip-wrap" data-tip="List / grid view">
+          <button class="dl-btn dl-btn-icon dl-btn-ghost" id="dlViewToggleBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 4h18M3 10h18M3 16h18"/></svg>
+          </button>
+        </div>
+      </div>
+      <div class="dl-pane-body dl-scroll" id="dlListBody"></div>
+    </div>
+    <div class="dl-splitter" id="dlSplitterB" style="display:none;"></div>
+
+    <div class="dl-pane dl-pane-preview" id="dlPanePreview" style="display:none;">
+      <div class="dl-preview-header">
+        <div class="dl-preview-title" id="dlPreviewTitle">Select a document to preview</div>
+        <div class="dl-preview-actions" id="dlPreviewActions"></div>
+      </div>
+      <div class="dl-preview-body" id="dlPreviewBody"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+"use strict";
+
+/* =========================================================================
+   1. CONFIG  (config.js equivalent)
+   Only place the Google OAuth Client ID needs to be entered.
+========================================================================= */
+const CONFIG = {
+  GOOGLE_CLIENT_ID: "1027525555617-kpq4ghvl4frnj3d5e45sfgl2rfohis17.apps.googleusercontent.com",
+  // Minimum scope for full "browse My Drive + preview anything" per spec
+  // section 24. See the accompanying OAuth Setup Guide for the tradeoffs
+  // of this scope vs. the narrower drive.file scope.
+  DRIVE_SCOPE: "https://www.googleapis.com/auth/drive.readonly",
+  DRIVE_API_BASE: "https://www.googleapis.com/drive/v3",
+  CACHE_TTL_MS: 5 * 60 * 1000,       // folder/file metadata cache lifetime
+  PAGE_SIZE: 100
+};
+
+/* =========================================================================
+   2. DocumentLibraryDB   (documentLibraryDB.js equivalent)
+   Cache + UI-state only. Google Drive remains the system of record.
+   Never stores OAuth tokens.
+========================================================================= */
+const DocumentLibraryDB = (function(){
+  const DB_NAME = "DocumentLibraryDB";
+  const DB_VERSION = 1;
+  let dbPromise = null;
+
+  function open(){
+    if (dbPromise) return dbPromise;
+    dbPromise = new Promise((resolve, reject) => {
+      const req = indexedDB.open(DB_NAME, DB_VERSION);
+      req.onupgradeneeded = (e) => {
+        const db = e.target.result;
+        if (!db.objectStoreNames.contains("driveFolders")){
+          const s = db.createObjectStore("driveFolders", { keyPath: "folderId" });
+          s.createIndex("parentId", "parentId");
+          s.createIndex("name", "name");
+        }
+        if (!db.objectStoreNames.contains("driveFiles")){
+          const s = db.createObjectStore("driveFiles", { keyPath: "fileId" });
+          s.createIndex("parentId", "parentId");
+          s.createIndex("name", "name");
+          s.createIndex("mimeType", "mimeType");
+        }
+        if (!db.objectStoreNames.contains("documentSettings")){
+          db.createObjectStore("documentSettings", { keyPath: "key" });
+        }
+        if (!db.objectStoreNames.contains("documentRecent")){
+          const s = db.createObjectStore("documentRecent", { keyPath: "fileId" });
+          s.createIndex("openedAt", "openedAt");
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => reject(req.error);
+    });
+    return dbPromise;
+  }
+
+  async function tx(storeName, mode){
+    const db = await open();
+    return db.transaction(storeName, mode).objectStore(storeName);
+  }
+
+  return {
+    async getSetting(key, fallback){
+      try{
+        const store = await tx("documentSettings", "readonly");
+        return await new Promise((res) => {
+          const r = store.get(key);
+          r.onsuccess = () => res(r.result ? r.result.value : fallback);
+          r.onerror = () => res(fallback);
+        });
+      } catch(e){ return fallback; }
+    },
+    async setSetting(key, value){
+      try{
+        const store = await tx("documentSettings", "readwrite");
+        store.put({ key, value });
+      } catch(e){ /* non-fatal: settings are best-effort */ }
+    },
+    async cacheFolderChildren(parentId, folders, files){
+      try{
+        const db = await open();
+        const t = db.transaction(["driveFolders","driveFiles"], "readwrite");
+        const fStore = t.objectStore("driveFolders");
+        const fileStore = t.objectStore("driveFiles");
+        const now = Date.now();
+        folders.forEach(f => fStore.put({ ...f, parentId, cachedAt: now }));
+        files.forEach(f => fileStore.put({ ...f, parentId, cachedAt: now }));
+      } catch(e){ /* cache is best-effort */ }
+    },
+    async getCachedChildren(parentId, ttlMs){
+      try{
+        const db = await open();
+        const t = db.transaction(["driveFolders","driveFiles"], "readonly");
+        const now = Date.now();
+        const readIndex = (store, idxName) => new Promise((res) => {
+          const idx = store.index(idxName);
+          const items = [];
+          const req = idx.openCursor(IDBKeyRange.only(parentId));
+          req.onsuccess = (e) => {
+            const cur = e.target.result;
+            if (cur){ items.push(cur.value); cur.continue(); } else res(items);
+          };
+          req.onerror = () => res([]);
+        });
+        const folders = await readIndex(t.objectStore("driveFolders"), "parentId");
+        const files = await readIndex(t.objectStore("driveFiles"), "parentId");
+        const fresh = folders.length + files.length > 0 &&
+          [...folders, ...files].every(x => (now - (x.cachedAt||0)) < ttlMs);
+        if (!fresh) return null;
+        return { folders, files };
+      } catch(e){ return null; }
+    }
+  };
+})();
+
+/* =========================================================================
+   3. GoogleAuth   (googleAuth.js equivalent)
+   Wraps Google Identity Services token client. Access tokens are held only
+   in memory for this session — never persisted to IndexedDB/localStorage.
+========================================================================= */
+const GoogleAuth = (function(){
+  let tokenClient = null;
+  let accessToken = null;
+  let tokenExpiresAt = 0;
+  let onStateChange = () => {};
+
+  function gisReady(){
+    return !!(window.google && google.accounts && google.accounts.oauth2);
+  }
+
+  function waitForGis(timeoutMs = 8000){
+    return new Promise((resolve, reject) => {
+      if (gisReady()) return resolve();
+      const start = Date.now();
+      const iv = setInterval(() => {
+        if (gisReady()){ clearInterval(iv); resolve(); }
+        else if (Date.now() - start > timeoutMs){ clearInterval(iv); reject(new Error("gis_load_timeout")); }
+      }, 100);
+    });
+  }
+
+  async function init(){
+    await waitForGis();
+    tokenClient = google.accounts.oauth2.initTokenClient({
+      client_id: CONFIG.GOOGLE_CLIENT_ID,
+      scope: CONFIG.DRIVE_SCOPE,
+      callback: () => {} // overridden per-call below
+    });
+  }
+
+  function requestToken({ prompt } = {}){
+    return new Promise((resolve, reject) => {
+      if (!tokenClient) return reject(new Error("auth_not_initialized"));
+      tokenClient.callback = (resp) => {
+        if (resp && resp.error){
+          reject(new Error(resp.error === "access_denied" ? "access_denied" : resp.error));
+          return;
+        }
+        accessToken = resp.access_token;
+        tokenExpiresAt = Date.now() + (Number(resp.expires_in || 3600) * 1000) - 15000;
+        onStateChange({ connected: true });
+        resolve(accessToken);
+      };
+      try{
+        tokenClient.requestAccessToken({ prompt: prompt || "" });
+      } catch(e){ reject(e); }
+    });
+  }
+
+  return {
+    onChange(fn){ onStateChange = fn; },
+    init,
+    connect(){ return requestToken({ prompt: "consent" }); },
+    silentReauth(){ return requestToken({ prompt: "" }); },
+    isConnected(){ return !!accessToken && Date.now() < tokenExpiresAt; },
+    isExpiringSoon(){ return !!accessToken && Date.now() >= tokenExpiresAt; },
+    async getToken(){
+      if (this.isConnected()) return accessToken;
+      // Try a silent refresh before forcing a full reconnect flow.
+      try { return await this.silentReauth(); }
+      catch(e){ throw new Error("token_expired"); }
+    },
+    disconnect(){
+      if (accessToken && window.google && google.accounts && google.accounts.oauth2){
+        try { google.accounts.oauth2.revoke(accessToken, () => {}); } catch(e){}
+      }
+      accessToken = null;
+      tokenExpiresAt = 0;
+      onStateChange({ connected: false });
+    }
+  };
+})();
+
+/* =========================================================================
+   4. GoogleDriveService   (googleDriveService.js equivalent)
+   All Drive REST calls go through here — UI never calls fetch() on Drive
+   endpoints directly. Handles pagination, field masks, and error mapping.
+========================================================================= */
+const GoogleDriveService = (function(){
+
+  async function apiFetch(path, params){
+    const token = await GoogleAuth.getToken();
+    const url = new URL(CONFIG.DRIVE_API_BASE + path);
+    Object.entries(params || {}).forEach(([k,v]) => { if (v !== undefined) url.searchParams.set(k, v); });
+    const res = await fetch(url.toString(), { headers: { Authorization: "Bearer " + token } });
+    if (!res.ok){
+      const err = new Error("drive_api_error");
+      err.status = res.status;
+      try { err.body = await res.json(); } catch(e){}
+      throw err;
+    }
+    return res.json();
+  }
+
+  async function listChildren(folderId, { pageToken } = {}){
+    const fields = "nextPageToken, files(id,name,mimeType,parents,modifiedTime,size,iconLink,thumbnailLink,webViewLink,webContentLink)";
+    const q = `'${folderId}' in parents and trashed = false`;
+    return apiFetch("/files", {
+      q, fields, pageSize: CONFIG.PAGE_SIZE, pageToken,
+      orderBy: "folder,name_natural"
+    });
+  }
+
+  async function listAllChildren(folderId){
+    let files = [];
+    let pageToken;
+    do {
+      const page = await apiFetch("/files", {
+        q: `'${folderId}' in parents and trashed = false`,
+        fields: "nextPageToken, files(id,name,mimeType,parents,modifiedTime,size,iconLink,thumbnailLink,webViewLink,webContentLink)",
+        pageSize: CONFIG.PAGE_SIZE, pageToken,
+        orderBy: "folder,name_natural"
+      });
+      files = files.concat(page.files || []);
+      pageToken = page.nextPageToken;
+    } while (pageToken);
+    const folders = files.filter(f => f.mimeType === "application/vnd.google-apps.folder")
+      .map(f => ({ folderId: f.id, parentId: folderId, name: f.name, mimeType: f.mimeType, modifiedTime: f.modifiedTime }));
+    const nonFolders = files.filter(f => f.mimeType !== "application/vnd.google-apps.folder")
+      .map(f => ({ fileId: f.id, parentId: folderId, name: f.name, mimeType: f.mimeType,
+                    size: f.size, modifiedTime: f.modifiedTime, iconLink: f.iconLink,
+                    thumbnailLink: f.thumbnailLink, webViewLink: f.webViewLink, webContentLink: f.webContentLink }));
+    return { folders, nonFolders };
+  }
+
+  async function getFileMetadata(fileId){
+    return apiFetch(`/files/${fileId}`, {
+      fields: "id,name,mimeType,parents,modifiedTime,size,iconLink,thumbnailLink,webViewLink,webContentLink"
+    });
+  }
+
+  async function getFolderName(folderId){
+    if (folderId === "root") return "My Drive";
+    const meta = await apiFetch(`/files/${folderId}`, { fields: "id,name,parents" });
+    return meta.name;
+  }
+
+  async function getParentChain(folderId){
+    // Walk up parents to build a breadcrumb. Stops at 'root' or no parent.
+    const chain = [];
+    let current = folderId;
+    let guard = 0;
+    while (current && current !== "root" && guard < 25){
+      const meta = await apiFetch(`/files/${current}`, { fields: "id,name,parents" });
+      chain.unshift({ id: meta.id, name: meta.name });
+      current = (meta.parents && meta.parents[0]) || null;
+      guard++;
+    }
+    chain.unshift({ id: "root", name: "My Drive" });
+    return chain;
+  }
+
+  async function downloadBlob(fileId){
+    const token = await GoogleAuth.getToken();
+    const res = await fetch(`${CONFIG.DRIVE_API_BASE}/files/${fileId}?alt=media`, {
+      headers: { Authorization: "Bearer " + token }
+    });
+    if (!res.ok){
+      const err = new Error("drive_download_error");
+      err.status = res.status;
+      throw err;
+    }
+    return res.blob();
+  }
+
+  return { listChildren, listAllChildren, getFileMetadata, getFolderName, getParentChain, downloadBlob };
+})();
+
+/* =========================================================================
+   5. PreviewService   (documentPreviewService.js equivalent)
+   Decides how to render a given file based on MIME type, and manages
+   object-URL lifecycle so large files don't leak memory.
+========================================================================= */
+const PreviewService = (function(){
+  let activeObjectUrl = null;
+
+  function releaseActiveUrl(){
+    if (activeObjectUrl){ URL.revokeObjectURL(activeObjectUrl); activeObjectUrl = null; }
+  }
+
+  function kindFor(mimeType){
+    if (mimeType === "application/pdf") return "pdf";
+    if (mimeType.startsWith("image/")) return "image";
+    if (mimeType === "text/plain") return "text";
+    if (mimeType === "text/csv") return "csv";
+    if (mimeType === "application/vnd.google-apps.document") return "gdoc";
+    if (mimeType === "application/vnd.google-apps.spreadsheet") return "gsheet";
+    if (mimeType === "application/vnd.google-apps.presentation") return "gslides";
+    return "unsupported";
+  }
+
+  function gPreviewUrl(kind, fileId){
+    const path = kind === "gsheet" ? "spreadsheets" : kind === "gslides" ? "presentation" : "document";
+    return `https://docs.google.com/${path}/d/${fileId}/preview`;
+  }
+
+  async function render(file, container){
+    releaseActiveUrl();
+    container.innerHTML = "";
+    const kind = kindFor(file.mimeType);
+
+    if (kind === "gdoc" || kind === "gsheet" || kind === "gslides"){
+      const iframe = document.createElement("iframe");
+      iframe.src = gPreviewUrl(kind, file.id || file.fileId);
+      iframe.setAttribute("title", file.name);
+      container.appendChild(iframe);
+      return;
+    }
+
+    if (kind === "pdf" || kind === "image"){
+      container.appendChild(loadingNode(`Loading preview\u2026`));
+      try{
+        const blob = await GoogleDriveService.downloadBlob(file.id || file.fileId);
+        const url = URL.createObjectURL(blob);
+        activeObjectUrl = url;
+        container.innerHTML = "";
+        if (kind === "pdf"){
+          const iframe = document.createElement("iframe");
+          iframe.src = url;
+          iframe.setAttribute("title", file.name);
+          container.appendChild(iframe);
+        } else {
+          const img = document.createElement("img");
+          img.src = url;
+          img.alt = file.name;
+          container.appendChild(img);
+        }
+      } catch(e){
+        renderError(container, e, file);
+      }
+      return;
+    }
+
+    if (kind === "text" || kind === "csv"){
+      container.appendChild(loadingNode(`Loading preview\u2026`));
+      try{
+        const blob = await GoogleDriveService.downloadBlob(file.id || file.fileId);
+        const text = await blob.text();
+        container.innerHTML = "";
+        if (kind === "text"){
+          const pre = document.createElement("pre");
+          pre.textContent = text;
+          container.appendChild(pre);
+        } else {
+          container.appendChild(renderCsvTable(text));
+        }
+      } catch(e){
+        renderError(container, e, file);
+      }
+      return;
+    }
+
+    // Unsupported type → metadata card
+    container.appendChild(metaCard(file));
+  }
+
+  function renderCsvTable(text){
+    const rows = text.split(/\r?\n/).filter(r => r.length).slice(0, 500).map(r => r.split(","));
+    const table = document.createElement("table");
+    table.className = "dl-csv";
+    rows.forEach(cells => {
+      const tr = document.createElement("tr");
+      cells.forEach(c => { const td = document.createElement("td"); td.textContent = c; tr.appendChild(td); });
+      table.appendChild(tr);
+    });
+    return table;
+  }
+
+  function loadingNode(label){
+    const div = document.createElement("div");
+    div.className = "dl-inline-loading";
+    div.innerHTML = `<span class="dl-spinner"></span><span>${escapeHtml(label)}</span>`;
+    return div;
+  }
+
+  function metaCard(file){
+    const card = document.createElement("div");
+    card.className = "dl-metacard";
+    card.innerHTML = `
+      <div class="dl-metacard-icon">${fileIconSvg(file.mimeType, 34)}</div>
+      <div class="dl-metacard-name">${escapeHtml(file.name)}</div>
+      <div class="dl-metacard-sub">${escapeHtml(friendlyType(file.mimeType))} \u00b7 ${formatBytes(file.size)} \u00b7 ${formatDate(file.modifiedTime)}</div>
+      <a class="dl-btn dl-btn-sm" href="${file.webViewLink || '#'}" target="_blank" rel="noopener">Open in Google Drive</a>
+    `;
+    return card;
+  }
+
+  function renderError(container, err, file){
+    container.innerHTML = "";
+    container.appendChild(stateNode({
+      error: true,
+      title: mapErrorTitle(err),
+      sub: "You can still open this file directly in Google Drive.",
+      extra: `<a class="dl-btn dl-btn-sm" style="margin-top:10px;" href="${file.webViewLink || '#'}" target="_blank" rel="noopener">Open in Google Drive</a>`
+    }));
+  }
+
+  return { render, releaseActiveUrl: releaseActiveUrl, kindFor };
+})();
+
+/* =========================================================================
+   6. Shared helpers
+========================================================================= */
+function escapeHtml(s){
+  return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;" }[c]));
+}
+function formatBytes(bytes){
+  if (bytes == null) return "\u2014";
+  const n = Number(bytes);
+  if (!n) return "0 B";
+  const units = ["B","KB","MB","GB","TB"];
+  const i = Math.min(units.length - 1, Math.floor(Math.log(n) / Math.log(1024)));
+  return (n / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 1) + " " + units[i];
+}
+function formatDate(iso){
+  if (!iso) return "\u2014";
+  const d = new Date(iso);
+  return d.toLocaleDateString(undefined, { year:"numeric", month:"short", day:"numeric" });
+}
+function friendlyType(mimeType){
+  const map = {
+    "application/vnd.google-apps.folder": "Folder",
+    "application/vnd.google-apps.document": "Google Doc",
+    "application/vnd.google-apps.spreadsheet": "Google Sheet",
+    "application/vnd.google-apps.presentation": "Google Slides",
+    "application/pdf": "PDF",
+    "text/plain": "Text file",
+    "text/csv": "CSV"
+  };
+  if (map[mimeType]) return map[mimeType];
+  if (mimeType && mimeType.startsWith("image/")) return mimeType.replace("image/","").toUpperCase() + " image";
+  return mimeType || "File";
+}
+function fileIconSvg(mimeType, size){
+  size = size || 15;
+  const isFolder = mimeType === "application/vnd.google-apps.folder";
+  const stroke = isFolder ? "#5b8def" : "#8b93a1";
+  if (isFolder){
+    return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${stroke}" stroke-width="1.8"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>`;
+  }
+  return `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="${stroke}" stroke-width="1.8"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8Z"/><path d="M14 2v6h6"/></svg>`;
+}
+function stateNode({ error, title, sub, extra }){
+  const div = document.createElement("div");
+  div.className = "dl-state" + (error ? " is-error" : "");
+  div.innerHTML = `
+    <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+      ${error ? '<circle cx="12" cy="12" r="9"/><path d="M12 8v5M12 16h.01"/>' : '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/>'}
+    </svg>
+    <div class="dl-state-title">${escapeHtml(title)}</div>
+    ${sub ? `<div class="dl-state-sub">${escapeHtml(sub)}</div>` : ""}
+    ${extra || ""}
+  `;
+  return div;
+}
+function mapErrorTitle(err){
+  const status = err && err.status;
+  if (err && err.message === "token_expired") return "Your Google Drive session expired";
+  if (status === 403) return "Permission denied";
+  if (status === 404) return "File or folder no longer exists";
+  if (status === 429) return "Google Drive is rate-limiting requests";
+  if (status >= 500) return "Google Drive is temporarily unavailable";
+  if (err && err.message === "access_denied") return "Access to Google Drive was denied";
+  if (!navigator.onLine) return "You appear to be offline";
+  return "Something went wrong loading this";
+}
+
+/* =========================================================================
+   7. UI STATE + RENDER
+========================================================================= */
+const els = {
+  connPill: document.getElementById("dlConnPill"),
+  connDot: document.getElementById("dlConnDot"),
+  connLabel: document.getElementById("dlConnLabel"),
+  connectBtn: document.getElementById("dlConnectBtn"),
+  connectBtn2: document.getElementById("dlConnectBtn2"),
+  disconnectBtn: document.getElementById("dlDisconnectBtn"),
+  refreshBtn: document.getElementById("dlRefreshBtn"),
+  connectScreen: document.getElementById("dlConnectScreen"),
+  paneTree: document.getElementById("dlPaneTree"),
+  paneList: document.getElementById("dlPaneList"),
+  panePreview: document.getElementById("dlPanePreview"),
+  splitterA: document.getElementById("dlSplitterA"),
+  splitterB: document.getElementById("dlSplitterB"),
+  tree: document.getElementById("dlTree"),
+  breadcrumb: document.getElementById("dlBreadcrumb"),
+  listBody: document.getElementById("dlListBody"),
+  listRefreshBtn: document.getElementById("dlListRefreshBtn"),
+  viewToggleBtn: document.getElementById("dlViewToggleBtn"),
+  searchInput: document.getElementById("dlSearchInput"),
+  previewTitle: document.getElementById("dlPreviewTitle"),
+  previewActions: document.getElementById("dlPreviewActions"),
+  previewBody: document.getElementById("dlPreviewBody"),
+  collapseTreeBtn: document.getElementById("dlCollapseTreeBtn"),
+  collapsePreviewBtn: document.getElementById("dlCollapsePreviewBtn"),
+  workspace: document.getElementById("dlWorkspace"),
+  root: document.getElementById("dlRoot")
+};
+
+const state = {
+  currentFolderId: "root",
+  currentFolderName: "My Drive",
+  selectedFile: null,
+  treeExpanded: new Set(["root"]),
+  listSort: { column: "name", dir: "asc" },
+  listViewMode: "list",
+  searchTerm: "",
+  currentFolderItems: { folders: [], files: [] },
+  isTreeCollapsed: false,
+  isPreviewCollapsed: false
+};
+
+function setConnectionUI(mode){ // 'disconnected' | 'connected' | 'busy' | 'error'
+  els.connPill.className = "dl-conn-pill" + (mode === "connected" ? " is-connected" : mode === "busy" ? " is-busy" : mode === "error" ? " is-error" : "");
+  els.connLabel.textContent = mode === "connected" ? "Connected to Google Drive" : mode === "busy" ? "Connecting\u2026" : mode === "error" ? "Reconnect needed" : "Not connected";
+  const connected = mode === "connected";
+  els.connectBtn.style.display = connected ? "none" : "";
+  els.disconnectBtn.style.display = connected ? "" : "none";
+  els.refreshBtn.style.display = connected ? "" : "none";
+}
+
+function showWorkspace(connected){
+  els.connectScreen.style.display = connected ? "none" : "";
+  [els.paneTree, els.paneList, els.panePreview, els.splitterA, els.splitterB].forEach(el => {
+    el.style.display = connected ? "" : "none";
+  });
+}
+
+/* ---------------------- Folder tree ---------------------- */
+async function initTree(){
+  els.tree.innerHTML = "";
+  const rootNode = renderTreeNode({ folderId: "root", name: "Google Drive", isRootLabel: true }, 0, true);
+  els.tree.appendChild(rootNode);
+  const myDriveNode = renderTreeNode({ folderId: "root", name: "My Drive" }, 0, false);
+  els.tree.appendChild(myDriveNode);
+  await expandTreeNode("root", myDriveNode.querySelector(".dl-tree-children-slot"));
+}
+
+function renderTreeNode(folder, depth, isStaticRootLabel){
+  const wrap = document.createElement("div");
+  wrap.className = "dl-tree-node";
+
+  const row = document.createElement("div");
+  row.className = "dl-tree-row";
+  row.style.paddingLeft = (6 + depth * 2) + "px";
+  row.dataset.folderId = folder.folderId;
+
+  const caret = document.createElement("span");
+  caret.className = "dl-tree-caret" + (isStaticRootLabel ? " is-empty" : "");
+  caret.innerHTML = `<svg width="10" height="10" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>`;
+
+  const icon = document.createElement("span");
+  icon.className = "dl-tree-icon";
+  icon.innerHTML = fileIconSvg("application/vnd.google-apps.folder", 15);
+
+  const label = document.createElement("span");
+  label.className = "dl-tree-label";
+  label.textContent = folder.name;
+
+  row.appendChild(caret);
+  row.appendChild(icon);
+  row.appendChild(label);
+  wrap.appendChild(row);
+
+  if (isStaticRootLabel){
+    row.style.cursor = "default";
+    row.style.color = "var(--dl-text-muted)";
+    row.style.fontWeight = "600";
+    row.style.fontSize = "11px";
+    row.style.textTransform = "uppercase";
+    row.style.letterSpacing = ".04em";
+    icon.style.display = "none";
+    return wrap;
+  }
+
+  const childrenSlot = document.createElement("div");
+  childrenSlot.className = "dl-tree-children dl-tree-children-slot";
+  childrenSlot.style.display = "none";
+  wrap.appendChild(childrenSlot);
+
+  let expanded = false;
+  let loaded = false;
+
+  async function toggle(){
+    expanded = !expanded;
+    caret.classList.toggle("is-expanded", expanded);
+    childrenSlot.style.display = expanded ? "" : "none";
+    if (expanded && !loaded){
+      loaded = true;
+      await expandTreeNode(folder.folderId, childrenSlot, depth + 1);
+    }
+  }
+  caret.addEventListener("click", (e) => { e.stopPropagation(); toggle(); });
+  row.addEventListener("click", () => {
+    selectFolder(folder.folderId, folder.name);
+    document.querySelectorAll(".dl-tree-row.is-selected").forEach(r => r.classList.remove("is-selected"));
+    row.classList.add("is-selected");
+    if (!expanded) toggle();
+  });
+
+  return wrap;
+}
+
+async function expandTreeNode(folderId, slot, depth){
+  slot.innerHTML = "";
+  const loadingEl = document.createElement("div");
+  loadingEl.className = "dl-tree-loading";
+  loadingEl.innerHTML = `<span class="dl-spinner"></span> Loading folders\u2026`;
+  slot.appendChild(loadingEl);
+
+  try{
+    const { folders } = await getChildrenCachedOrLive(folderId);
+    slot.innerHTML = "";
+    if (!folders.length){
+      const empty = document.createElement("div");
+      empty.className = "dl-tree-loading";
+      empty.style.paddingLeft = "24px";
+      empty.textContent = "No subfolders";
+      slot.appendChild(empty);
+      return;
+    }
+    folders.forEach(f => {
+      slot.appendChild(renderTreeNode({ folderId: f.folderId, name: f.name }, depth || 1, false));
+    });
+  } catch(e){
+    slot.innerHTML = "";
+    const errEl = document.createElement("div");
+    errEl.className = "dl-tree-loading";
+    errEl.style.color = "var(--dl-danger)";
+    errEl.style.paddingLeft = "24px";
+    errEl.textContent = mapErrorTitle(e);
+    slot.appendChild(errEl);
+    handlePossibleAuthError(e);
+  }
+}
+
+/* ---------------------- Data loading (cache-first) ---------------------- */
+async function getChildrenCachedOrLive(folderId, forceLive){
+  if (!forceLive){
+    const cached = await DocumentLibraryDB.getCachedChildren(folderId, CONFIG.CACHE_TTL_MS);
+    if (cached) return cached;
+  }
+  const { folders, nonFolders } = await GoogleDriveService.listAllChildren(folderId);
+  await DocumentLibraryDB.cacheFolderChildren(folderId, folders, nonFolders);
+  return { folders, files: nonFolders };
+}
+
+/* ---------------------- Middle pane: folder contents ---------------------- */
+async function selectFolder(folderId, folderName, forceLive){
+  state.currentFolderId = folderId;
+  state.currentFolderName = folderName;
+  state.selectedFile = null;
+  renderPreviewEmpty();
+  await renderBreadcrumb(folderId);
+  await renderFolderContents(folderId, forceLive);
+}
+
+async function renderBreadcrumb(folderId){
+  els.breadcrumb.innerHTML = `<span class="dl-inline-loading" style="padding:0;"><span class="dl-spinner"></span></span>`;
+  try{
+    const chain = folderId === "root" ? [{ id: "root", name: "My Drive" }] : await GoogleDriveService.getParentChain(folderId);
+    els.breadcrumb.innerHTML = "";
+    chain.forEach((c, idx) => {
+      const isLast = idx === chain.length - 1;
+      const crumb = document.createElement("span");
+      crumb.className = "dl-crumb" + (isLast ? " is-current" : "");
+      crumb.textContent = c.name;
+      if (!isLast) crumb.addEventListener("click", () => selectFolder(c.id, c.name));
+      els.breadcrumb.appendChild(crumb);
+      if (!isLast){
+        const sep = document.createElement("span");
+        sep.className = "dl-crumb-sep";
+        sep.textContent = "/";
+        els.breadcrumb.appendChild(sep);
+      }
+    });
+  } catch(e){
+    els.breadcrumb.textContent = state.currentFolderName;
+  }
+}
+
+async function renderFolderContents(folderId, forceLive){
+  els.listBody.innerHTML = "";
+  els.listBody.appendChild((() => {
+    const d = document.createElement("div");
+    d.className = "dl-inline-loading";
+    d.innerHTML = `<span class="dl-spinner"></span> Loading files\u2026`;
+    return d;
+  })());
+
+  try{
+    const { folders, files } = await getChildrenCachedOrLive(folderId, forceLive);
+    state.currentFolderItems = { folders, files };
+    renderListTable();
+  } catch(e){
+    els.listBody.innerHTML = "";
+    els.listBody.appendChild(stateNode({ error: true, title: mapErrorTitle(e), sub: "Try refreshing this folder." }));
+    handlePossibleAuthError(e);
+  }
+}
+
+function getSortedFilteredItems(){
+  const term = state.searchTerm.trim().toLowerCase();
+  let folders = state.currentFolderItems.folders.map(f => ({ ...f, __isFolder: true, id: f.folderId, name: f.name, modifiedTime: f.modifiedTime }));
+  let files = state.currentFolderItems.files.map(f => ({ ...f, __isFolder: false, id: f.fileId }));
+  let all = [...folders, ...files];
+  if (term) all = all.filter(x => x.name.toLowerCase().includes(term));
+
+  const { column, dir } = state.listSort;
+  const mult = dir === "asc" ? 1 : -1;
+  all.sort((a, b) => {
+    if (a.__isFolder !== b.__isFolder) return a.__isFolder ? -1 : 1; // folders first always
+    let av, bv;
+    if (column === "name"){ av = a.name.toLowerCase(); bv = b.name.toLowerCase(); }
+    else if (column === "modified"){ av = a.modifiedTime || ""; bv = b.modifiedTime || ""; }
+    else if (column === "size"){ av = Number(a.size || 0); bv = Number(b.size || 0); }
+    else { av = a.mimeType || ""; bv = b.mimeType || ""; }
+    if (av < bv) return -1 * mult;
+    if (av > bv) return 1 * mult;
+    return 0;
+  });
+  return all;
+}
+
+function renderListTable(){
+  els.listBody.innerHTML = "";
+  const items = getSortedFilteredItems();
+
+  if (!items.length){
+    els.listBody.appendChild(stateNode({
+      title: state.searchTerm ? "No search results" : "Folder is empty",
+      sub: state.searchTerm ? "Try a different search term." : "There's nothing in this folder yet."
+    }));
+    return;
+  }
+
+  const table = document.createElement("table");
+  table.className = "dl-table";
+  const sortArrow = (col) => state.listSort.column === col ? `<span class="dl-sort-arrow">${state.listSort.dir === "asc" ? "\u25B2" : "\u25BC"}</span>` : "";
+  table.innerHTML = `
+    <thead><tr>
+      <th data-col="name">Name${sortArrow("name")}</th>
+      <th data-col="type">Type${sortArrow("type")}</th>
+      <th data-col="modified">Modified${sortArrow("modified")}</th>
+      <th data-col="size">Size${sortArrow("size")}</th>
+    </tr></thead>
+    <tbody></tbody>
+  `;
+  table.querySelectorAll("th").forEach(th => {
+    th.addEventListener("click", () => {
+      const col = th.dataset.col;
+      if (state.listSort.column === col) state.listSort.dir = state.listSort.dir === "asc" ? "desc" : "asc";
+      else state.listSort = { column: col, dir: "asc" };
+      renderListTable();
+    });
+  });
+
+  const tbody = table.querySelector("tbody");
+  items.forEach(item => {
+    const tr = document.createElement("tr");
+    tr.innerHTML = `
+      <td><div class="dl-cell-name">${fileIconSvg(item.mimeType, 15)}<span>${escapeHtml(item.name)}</span></div></td>
+      <td class="dl-cell-meta">${escapeHtml(friendlyType(item.mimeType))}</td>
+      <td class="dl-cell-meta">${escapeHtml(formatDate(item.modifiedTime))}</td>
+      <td class="dl-cell-meta">${item.__isFolder ? "\u2014" : escapeHtml(formatBytes(item.size))}</td>
+    `;
+    tr.addEventListener("click", () => {
+      tbody.querySelectorAll("tr.is-selected").forEach(r => r.classList.remove("is-selected"));
+      tr.classList.add("is-selected");
+      if (!item.__isFolder) selectFile(item);
+    });
+    tr.addEventListener("dblclick", () => {
+      if (item.__isFolder) selectFolder(item.id, item.name);
+      else selectFile(item);
+    });
+    tbody.appendChild(tr);
+  });
+  els.listBody.appendChild(table);
+}
+
+/* ---------------------- Right pane: preview ---------------------- */
+function renderPreviewEmpty(){
+  els.previewTitle.textContent = "Select a document to preview";
+  els.previewActions.innerHTML = "";
+  els.previewBody.innerHTML = "";
+  els.previewBody.appendChild(stateNode({ title: "No document selected", sub: "Choose a file from the folder contents to preview it here." }));
+}
+
+async function selectFile(file){
+  state.selectedFile = file;
+  els.previewTitle.textContent = file.name;
+  els.previewActions.innerHTML = `
+    <div class="dl-tooltip-wrap" data-tip="Open in Drive">
+      <a class="dl-btn dl-btn-icon dl-btn-ghost" href="${file.webViewLink || '#'}" target="_blank" rel="noopener">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14 21 3"/></svg>
+      </a>
+    </div>
+    <div class="dl-tooltip-wrap" data-tip="Download">
+      <button class="dl-btn dl-btn-icon dl-btn-ghost" id="dlDownloadBtn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/></svg>
+      </button>
+    </div>
+    <div class="dl-tooltip-wrap" data-tip="Information">
+      <button class="dl-btn dl-btn-icon dl-btn-ghost" id="dlInfoBtn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M12 16v-5M12 8h.01"/></svg>
+      </button>
+    </div>
+    <div class="dl-tooltip-wrap" data-tip="Expand Preview">
+      <button class="dl-btn dl-btn-icon dl-btn-ghost" id="dlExpandBtn">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M21 16v3a2 2 0 0 1-2 2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/></svg>
+      </button>
+    </div>
+  `;
+  document.getElementById("dlExpandBtn").addEventListener("click", () => openExpandedPreview(file));
+  document.getElementById("dlInfoBtn").addEventListener("click", () => showInfoPopover(file));
+  document.getElementById("dlDownloadBtn").addEventListener("click", () => triggerDownload(file));
+
+  els.previewBody.innerHTML = "";
+  const surface = document.createElement("div");
+  surface.className = "dl-preview-surface";
+  els.previewBody.appendChild(surface);
+  await PreviewService.render(file, surface).catch(e => handlePossibleAuthError(e));
+}
+
+async function triggerDownload(file){
+  const kind = PreviewService.kindFor(file.mimeType);
+  if (kind.startsWith("g")){
+    window.open(file.webViewLink, "_blank", "noopener");
+    return;
+  }
+  try{
+    const blob = await GoogleDriveService.downloadBlob(file.id || file.fileId);
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = file.name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+  } catch(e){ handlePossibleAuthError(e); }
+}
+
+function showInfoPopover(file){
+  alert(
+    `${file.name}\n` +
+    `${friendlyType(file.mimeType)}\n` +
+    `Modified: ${formatDate(file.modifiedTime)}\n` +
+    `Size: ${formatBytes(file.size)}`
+  );
+}
+
+/* ---------------------- Expanded / fullscreen preview ---------------------- */
+let expandedOverlayEl = null;
+
+function openExpandedPreview(file){
+  if (expandedOverlayEl) return;
+  expandedOverlayEl = document.createElement("div");
+  expandedOverlayEl.className = "dl-expand-overlay";
+  expandedOverlayEl.innerHTML = `
+    <div class="dl-expand-panel">
+      <div class="dl-expand-header">
+        <div class="dl-expand-title">${escapeHtml(file.name)}</div>
+        <button class="dl-btn dl-btn-icon dl-btn-ghost" id="dlExpandCloseBtn" aria-label="Close">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="dl-expand-body">
+        <div class="dl-preview-surface" id="dlExpandSurface" style="width:100%;"></div>
+      </div>
+    </div>
+  `;
+  els.workspace.appendChild(expandedOverlayEl);
+  const surface = expandedOverlayEl.querySelector("#dlExpandSurface");
+  PreviewService.render(file, surface).catch(e => handlePossibleAuthError(e));
+
+  const close = () => closeExpandedPreview();
+  expandedOverlayEl.querySelector("#dlExpandCloseBtn").addEventListener("click", close);
+  expandedOverlayEl.addEventListener("click", (e) => { if (e.target === expandedOverlayEl) close(); });
+  document.addEventListener("keydown", escListener);
+}
+function escListener(e){ if (e.key === "Escape") closeExpandedPreview(); }
+function closeExpandedPreview(){
+  if (!expandedOverlayEl) return;
+  expandedOverlayEl.remove();
+  expandedOverlayEl = null;
+  document.removeEventListener("keydown", escListener);
+  // Folder/selection state is untouched — no reload — so the 3-pane view
+  // is exactly as it was before expanding.
+}
+
+/* ---------------------- Auth error handling ---------------------- */
+function handlePossibleAuthError(err){
+  if (err && (err.message === "token_expired" || err.status === 401)){
+    setConnectionUI("error");
+  }
+}
+
+/* ---------------------- Pane collapse ---------------------- */
+els.collapseTreeBtn.addEventListener("click", () => {
+  state.isTreeCollapsed = !state.isTreeCollapsed;
+  els.paneTree.classList.toggle("is-collapsed", state.isTreeCollapsed);
+  els.splitterA.style.display = state.isTreeCollapsed ? "none" : "";
+  els.collapseTreeBtn.textContent = state.isTreeCollapsed ? "Show tree" : "Collapse tree";
+});
+els.collapsePreviewBtn.addEventListener("click", () => {
+  state.isPreviewCollapsed = !state.isPreviewCollapsed;
+  els.panePreview.classList.toggle("is-collapsed", state.isPreviewCollapsed);
+  els.splitterB.style.display = state.isPreviewCollapsed ? "none" : "";
+  els.collapsePreviewBtn.textContent = state.isPreviewCollapsed ? "Show preview" : "Collapse preview";
+  if (state.isPreviewCollapsed) els.paneList.style.flex = "1 1 auto";
+});
+
+/* ---------------------- Resizable splitters ---------------------- */
+function makeResizable(splitter, leftPane){
+  let dragging = false;
+  splitter.addEventListener("mousedown", (e) => {
+    dragging = true;
+    splitter.classList.add("is-dragging");
+    document.body.style.userSelect = "none";
+  });
+  window.addEventListener("mousemove", (e) => {
+    if (!dragging) return;
+    const rect = els.workspace.getBoundingClientRect();
+    const newWidth = e.clientX - rect.left - leftOffset(leftPane);
+    const min = parseInt(getComputedStyle(leftPane).minWidth) || 150;
+    const max = rect.width * 0.6;
+    leftPane.style.width = Math.max(min, Math.min(max, newWidth)) + "px";
+  });
+  window.addEventListener("mouseup", () => {
+    if (!dragging) return;
+    dragging = false;
+    splitter.classList.remove("is-dragging");
+    document.body.style.userSelect = "";
+    persistPaneWidths();
+  });
+  function leftOffset(pane){
+    let offset = 0;
+    let el = pane;
+    const wsRect = els.workspace.getBoundingClientRect();
+    return el.getBoundingClientRect().left - wsRect.left;
+  }
+}
+function persistPaneWidths(){
+  DocumentLibraryDB.setSetting("leftPaneWidth", els.paneTree.style.width);
+  DocumentLibraryDB.setSetting("middlePaneWidth", els.paneList.style.width);
+}
+makeResizable(els.splitterA, els.paneTree);
+makeResizable(els.splitterB, els.paneList);
+
+/* ---------------------- Search / sort / view toggle ---------------------- */
+let searchDebounce = null;
+els.searchInput.addEventListener("input", (e) => {
+  clearTimeout(searchDebounce);
+  const value = e.target.value;
+  searchDebounce = setTimeout(() => { state.searchTerm = value; renderListTable(); }, 180);
+});
+els.listRefreshBtn.addEventListener("click", () => renderFolderContents(state.currentFolderId, true));
+els.viewToggleBtn.addEventListener("click", () => {
+  // Placeholder per spec section 5 — grid view is a future enhancement.
+  state.listViewMode = state.listViewMode === "list" ? "grid" : "list";
+  DocumentLibraryDB.setSetting("viewMode", state.listViewMode);
+});
+
+/* =========================================================================
+   8. Connect / disconnect flow
+========================================================================= */
+async function handleConnectClick(){
+  setConnectionUI("busy");
+  try{
+    await GoogleAuth.init();
+    await GoogleAuth.connect();
+    setConnectionUI("connected");
+    showWorkspace(true);
+    await restorePaneWidths();
+    await initTree();
+    await selectFolder("root", "My Drive");
+  } catch(e){
+    setConnectionUI(e && e.message === "access_denied" ? "disconnected" : "error");
+    showWorkspace(false);
+    if (e && e.message === "access_denied"){
+      els.connectScreen.querySelector("p").textContent =
+        "Access was denied during sign-in. Click Connect Google Drive to try again.";
+    }
+  }
+}
+els.connectBtn.addEventListener("click", handleConnectClick);
+els.connectBtn2.addEventListener("click", handleConnectClick);
+els.disconnectBtn.addEventListener("click", () => {
+  GoogleAuth.disconnect();
+  setConnectionUI("disconnected");
+  showWorkspace(false);
+  PreviewService.releaseActiveUrl();
+});
+els.refreshBtn.addEventListener("click", async () => {
+  await renderFolderContents(state.currentFolderId, true);
+});
+
+async function restorePaneWidths(){
+  const leftW = await DocumentLibraryDB.getSetting("leftPaneWidth", null);
+  const midW = await DocumentLibraryDB.getSetting("middlePaneWidth", null);
+  if (leftW) els.paneTree.style.width = leftW;
+  if (midW) els.paneList.style.width = midW;
+  const viewMode = await DocumentLibraryDB.getSetting("viewMode", "list");
+  state.listViewMode = viewMode;
+}
+
+/* =========================================================================
+   9. Init
+========================================================================= */
+setConnectionUI("disconnected");
+showWorkspace(false);
+GoogleAuth.onChange(({ connected }) => {
+  if (!connected) { setConnectionUI("disconnected"); showWorkspace(false); }
+});
+// Warm up GIS + IndexedDB in the background so the first Connect click is fast.
+GoogleAuth.init().catch(() => { /* GIS not reachable yet; init() re-runs on connect click */ });
+
+})();
+</script>
+</body>
+</html>
