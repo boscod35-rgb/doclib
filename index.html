@@ -1388,7 +1388,19 @@ function renderPreviewEmpty(){
 async function selectFile(file){
   state.selectedFile = file;
   els.previewTitle.textContent = file.name;
+
+  const nav = getPreviewNavInfo(file);
   els.previewActions.innerHTML = `
+    <div class="dl-tooltip-wrap" data-tip="Previous">
+      <button class="dl-btn dl-btn-icon dl-btn-ghost" id="dlPrevBtn" ${nav.hasPrev ? "" : "disabled"}>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>
+      </button>
+    </div>
+    <div class="dl-tooltip-wrap" data-tip="Next">
+      <button class="dl-btn dl-btn-icon dl-btn-ghost" id="dlNextBtn" ${nav.hasNext ? "" : "disabled"}>
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg>
+      </button>
+    </div>
     <div class="dl-tooltip-wrap" data-tip="Open in Drive">
       <a class="dl-btn dl-btn-icon dl-btn-ghost" href="${file.webViewLink || '#'}" target="_blank" rel="noopener">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14 21 3"/></svg>
@@ -1410,15 +1422,45 @@ async function selectFile(file){
       </button>
     </div>
   `;
-  document.getElementById("dlExpandBtn").addEventListener("click", () => openExpandedPreview(file));
-  document.getElementById("dlInfoBtn").addEventListener("click", () => showInfoPopover(file));
-  document.getElementById("dlDownloadBtn").addEventListener("click", () => triggerDownload(file));
+  document.getElementById("dlExpandBtn").addEventListener("click", () => openExpandedPreview(state.selectedFile));
+  document.getElementById("dlInfoBtn").addEventListener("click", () => showInfoPopover(state.selectedFile));
+  document.getElementById("dlDownloadBtn").addEventListener("click", () => triggerDownload(state.selectedFile));
+  document.getElementById("dlPrevBtn").addEventListener("click", () => stepPreview(-1));
+  document.getElementById("dlNextBtn").addEventListener("click", () => stepPreview(1));
 
   els.previewBody.innerHTML = "";
   const surface = document.createElement("div");
   surface.className = "dl-preview-surface";
   els.previewBody.appendChild(surface);
   await PreviewService.render(file, surface).catch(e => handlePossibleAuthError(e));
+
+  // If the fullscreen overlay is open, refresh its contents + arrow states too.
+  if (expandedOverlayEl) updateExpandedContents(file);
+}
+
+/* ---- Prev/next navigation across previewable files in the current folder ---- */
+function getPreviewableList(){
+  // Same order the middle pane shows, files only, only previewable kinds.
+  return getSortedFilteredItems().filter(it =>
+    !it.__isFolder && PreviewService.kindFor(it.mimeType) !== "unsupported"
+  );
+}
+function getPreviewNavInfo(file){
+  const list = getPreviewableList();
+  const idx = list.findIndex(it => it.id === (file.id || file.fileId));
+  return { list, idx, hasPrev: idx > 0, hasNext: idx > -1 && idx < list.length - 1 };
+}
+function stepPreview(delta){
+  const { list, idx } = getPreviewNavInfo(state.selectedFile);
+  if (idx === -1) return;
+  const next = list[idx + delta];
+  if (!next) return;
+  // Keep the middle-pane row highlight in sync.
+  const rows = els.listBody.querySelectorAll("tbody tr");
+  rows.forEach(r => r.classList.remove("is-selected"));
+  const targetRow = Array.from(rows).find(r => r.querySelector(".dl-cell-name span")?.textContent === next.name);
+  if (targetRow) targetRow.classList.add("is-selected");
+  selectFile(next);
 }
 
 async function triggerDownload(file){
@@ -1456,7 +1498,17 @@ function openExpandedPreview(file){
   expandedOverlayEl.innerHTML = `
     <div class="dl-expand-panel">
       <div class="dl-expand-header">
-        <div class="dl-expand-title">${escapeHtml(file.name)}</div>
+        <div class="dl-tooltip-wrap" data-tip="Previous">
+          <button class="dl-btn dl-btn-icon dl-btn-ghost" id="dlExpandPrevBtn">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>
+          </button>
+        </div>
+        <div class="dl-tooltip-wrap" data-tip="Next">
+          <button class="dl-btn dl-btn-icon dl-btn-ghost" id="dlExpandNextBtn">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m9 18 6-6-6-6"/></svg>
+          </button>
+        </div>
+        <div class="dl-expand-title" id="dlExpandTitle">${escapeHtml(file.name)}</div>
         <button class="dl-btn dl-btn-icon dl-btn-ghost" id="dlExpandCloseBtn" aria-label="Close">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6 6 18M6 6l12 12"/></svg>
         </button>
@@ -1467,15 +1519,35 @@ function openExpandedPreview(file){
     </div>
   `;
   els.workspace.appendChild(expandedOverlayEl);
-  const surface = expandedOverlayEl.querySelector("#dlExpandSurface");
-  PreviewService.render(file, surface).catch(e => handlePossibleAuthError(e));
+  updateExpandedContents(file);
 
   const close = () => closeExpandedPreview();
   expandedOverlayEl.querySelector("#dlExpandCloseBtn").addEventListener("click", close);
+  expandedOverlayEl.querySelector("#dlExpandPrevBtn").addEventListener("click", () => stepPreview(-1));
+  expandedOverlayEl.querySelector("#dlExpandNextBtn").addEventListener("click", () => stepPreview(1));
   expandedOverlayEl.addEventListener("click", (e) => { if (e.target === expandedOverlayEl) close(); });
   document.addEventListener("keydown", escListener);
 }
-function escListener(e){ if (e.key === "Escape") closeExpandedPreview(); }
+
+// Renders the given file into the fullscreen surface and syncs arrow states.
+// Called both on open and when stepPreview changes the selection.
+function updateExpandedContents(file){
+  if (!expandedOverlayEl) return;
+  const titleEl = expandedOverlayEl.querySelector("#dlExpandTitle");
+  if (titleEl) titleEl.textContent = file.name;
+  const nav = getPreviewNavInfo(file);
+  const prevBtn = expandedOverlayEl.querySelector("#dlExpandPrevBtn");
+  const nextBtn = expandedOverlayEl.querySelector("#dlExpandNextBtn");
+  if (prevBtn) prevBtn.disabled = !nav.hasPrev;
+  if (nextBtn) nextBtn.disabled = !nav.hasNext;
+  const surface = expandedOverlayEl.querySelector("#dlExpandSurface");
+  PreviewService.render(file, surface).catch(e => handlePossibleAuthError(e));
+}
+function escListener(e){
+  if (e.key === "Escape"){ closeExpandedPreview(); return; }
+  if (e.key === "ArrowLeft"){ e.preventDefault(); stepPreview(-1); }
+  else if (e.key === "ArrowRight"){ e.preventDefault(); stepPreview(1); }
+}
 function closeExpandedPreview(){
   if (!expandedOverlayEl) return;
   expandedOverlayEl.remove();
@@ -1892,6 +1964,19 @@ GoogleAuth.onChange(({ connected }) => {
 if (CONFIG.GOOGLE_CLIENT_ID){
   GoogleAuth.init().catch(() => { /* GIS not reachable yet; init() re-runs on connect click */ });
 }
+
+// Arrow-key navigation in the normal (non-fullscreen) preview pane.
+// Fullscreen has its own handler (escListener); a dialog open or focus in a
+// text input suppresses this so typing/searching isn't hijacked.
+document.addEventListener("keydown", (e) => {
+  if (expandedOverlayEl) return;                       // fullscreen handles its own keys
+  if (els.workspace.querySelector(".dl-modal-overlay")) return; // a dialog is open
+  const tag = (document.activeElement && document.activeElement.tagName) || "";
+  if (tag === "INPUT" || tag === "TEXTAREA") return;   // don't steal typing
+  if (!state.selectedFile) return;
+  if (e.key === "ArrowLeft"){ e.preventDefault(); stepPreview(-1); }
+  else if (e.key === "ArrowRight"){ e.preventDefault(); stepPreview(1); }
+});
 
 })();
 </script>
