@@ -343,7 +343,21 @@
         <svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="#9aa1ac" stroke-width="1.5"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>
         <h2>No Google Drive connected</h2>
         <p>Connect your Google Drive to browse folders and preview files here. Read-only access — nothing is uploaded, moved, or deleted in this version.</p>
+
+        <!-- Client ID setup form: shown when no Client ID is saved yet -->
+        <div id="dlClientIdSetup" style="display:none; text-align:left; margin-bottom:16px;">
+          <label for="dlClientIdInput" style="display:block; font-size:12px; font-weight:600; color:var(--dl-text-muted); margin-bottom:5px;">Google OAuth Client ID</label>
+          <input type="text" id="dlClientIdInput" placeholder="1234567890-abc...apps.googleusercontent.com"
+                 style="width:100%; padding:7px 9px; border:1px solid var(--dl-border-strong); border-radius:var(--dl-radius); font-size:12.5px; font-family:var(--dl-mono); box-sizing:border-box;">
+          <div id="dlClientIdError" style="display:none; color:var(--dl-danger); font-size:11.5px; margin-top:5px;"></div>
+          <button class="dl-btn dl-btn-primary" id="dlSaveClientIdBtn" style="width:100%; justify-content:center; margin-top:9px;">Save & Connect</button>
+          <p style="font-size:11px; color:var(--dl-text-faint); margin:8px 0 0;">Saved only in this browser (localStorage) on this device. Not sent anywhere except to Google during sign-in.</p>
+        </div>
+
         <button class="dl-btn dl-btn-primary" id="dlConnectBtn2">Connect Google Drive</button>
+        <div style="margin-top:10px;">
+          <a href="#" id="dlChangeClientIdLink" style="font-size:11.5px; color:var(--dl-text-muted); display:none;">Change Client ID</a>
+        </div>
       </div>
     </div>
 
@@ -396,8 +410,14 @@
    1. CONFIG  (config.js equivalent)
    Only place the Google OAuth Client ID needs to be entered.
 ========================================================================= */
+const CLIENT_ID_STORAGE_KEY = "dl_google_client_id";
+
 const CONFIG = {
-  GOOGLE_CLIENT_ID: "1027525555617-kpq4ghvl4frnj3d5e45sfgl2rfohis17.apps.googleusercontent.com",
+  // Client ID is loaded from localStorage (entered once via the "Connect"
+  // screen setup form) rather than hardcoded here. Client IDs are public
+  // identifiers, not secrets, so storing this in localStorage is fine —
+  // unlike OAuth tokens, which this app never persists.
+  GOOGLE_CLIENT_ID: localStorage.getItem(CLIENT_ID_STORAGE_KEY) || "",
   // Minimum scope for full "browse My Drive + preview anything" per spec
   // section 24. See the accompanying OAuth Setup Guide for the tradeoffs
   // of this scope vs. the narrower drive.file scope.
@@ -406,6 +426,10 @@ const CONFIG = {
   CACHE_TTL_MS: 5 * 60 * 1000,       // folder/file metadata cache lifetime
   PAGE_SIZE: 100
 };
+
+function isValidClientIdFormat(id){
+  return /^[0-9]+-[a-z0-9]+\.apps\.googleusercontent\.com$/i.test((id || "").trim());
+}
 
 /* =========================================================================
    2. DocumentLibraryDB   (documentLibraryDB.js equivalent)
@@ -908,7 +932,12 @@ const els = {
   collapseTreeBtn: document.getElementById("dlCollapseTreeBtn"),
   collapsePreviewBtn: document.getElementById("dlCollapsePreviewBtn"),
   workspace: document.getElementById("dlWorkspace"),
-  root: document.getElementById("dlRoot")
+  root: document.getElementById("dlRoot"),
+  clientIdSetup: document.getElementById("dlClientIdSetup"),
+  clientIdInput: document.getElementById("dlClientIdInput"),
+  clientIdError: document.getElementById("dlClientIdError"),
+  saveClientIdBtn: document.getElementById("dlSaveClientIdBtn"),
+  changeClientIdLink: document.getElementById("dlChangeClientIdLink")
 };
 
 const state = {
@@ -1377,6 +1406,10 @@ els.viewToggleBtn.addEventListener("click", () => {
    8. Connect / disconnect flow
 ========================================================================= */
 async function handleConnectClick(){
+  if (!CONFIG.GOOGLE_CLIENT_ID){
+    showClientIdSetup();
+    return;
+  }
   setConnectionUI("busy");
   try{
     await GoogleAuth.init();
@@ -1407,6 +1440,46 @@ els.refreshBtn.addEventListener("click", async () => {
   await renderFolderContents(state.currentFolderId, true);
 });
 
+/* ---------------------- Client ID setup form ---------------------- */
+function showClientIdSetup(prefill){
+  els.clientIdSetup.style.display = "";
+  els.connectBtn2.style.display = "none";
+  els.clientIdError.style.display = "none";
+  els.clientIdInput.value = prefill || CONFIG.GOOGLE_CLIENT_ID || "";
+  els.clientIdInput.focus();
+}
+function hideClientIdSetup(){
+  els.clientIdSetup.style.display = "none";
+  els.connectBtn2.style.display = "";
+  els.changeClientIdLink.style.display = CONFIG.GOOGLE_CLIENT_ID ? "" : "none";
+}
+function updateClientIdUIOnLoad(){
+  if (!CONFIG.GOOGLE_CLIENT_ID){
+    showClientIdSetup();
+  } else {
+    hideClientIdSetup();
+  }
+}
+els.saveClientIdBtn.addEventListener("click", async () => {
+  const value = els.clientIdInput.value.trim();
+  if (!isValidClientIdFormat(value)){
+    els.clientIdError.textContent = "That doesn't look like a Client ID — it should end in .apps.googleusercontent.com";
+    els.clientIdError.style.display = "";
+    return;
+  }
+  localStorage.setItem(CLIENT_ID_STORAGE_KEY, value);
+  CONFIG.GOOGLE_CLIENT_ID = value;
+  hideClientIdSetup();
+  await handleConnectClick();
+});
+els.clientIdInput.addEventListener("keydown", (e) => {
+  if (e.key === "Enter") els.saveClientIdBtn.click();
+});
+els.changeClientIdLink.addEventListener("click", (e) => {
+  e.preventDefault();
+  showClientIdSetup(CONFIG.GOOGLE_CLIENT_ID);
+});
+
 async function restorePaneWidths(){
   const leftW = await DocumentLibraryDB.getSetting("leftPaneWidth", null);
   const midW = await DocumentLibraryDB.getSetting("middlePaneWidth", null);
@@ -1421,11 +1494,15 @@ async function restorePaneWidths(){
 ========================================================================= */
 setConnectionUI("disconnected");
 showWorkspace(false);
+updateClientIdUIOnLoad();
 GoogleAuth.onChange(({ connected }) => {
   if (!connected) { setConnectionUI("disconnected"); showWorkspace(false); }
 });
-// Warm up GIS + IndexedDB in the background so the first Connect click is fast.
-GoogleAuth.init().catch(() => { /* GIS not reachable yet; init() re-runs on connect click */ });
+// Warm up GIS + IndexedDB in the background so the first Connect click is fast
+// (only meaningful once a Client ID has been saved).
+if (CONFIG.GOOGLE_CLIENT_ID){
+  GoogleAuth.init().catch(() => { /* GIS not reachable yet; init() re-runs on connect click */ });
+}
 
 })();
 </script>
