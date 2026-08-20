@@ -206,21 +206,27 @@
   .dl-search input{ border:none; outline:none; background:transparent; flex:1; color:var(--dl-text); font-size:12.5px; }
   .dl-search svg{ flex:none; }
 
-  .dl-table{ width:100%; border-collapse:collapse; font-size:13px; }
+  .dl-table{ width:100%; border-collapse:collapse; font-size:13px; table-layout:fixed; }
+  /* Fixed column widths: Name flexes to fill, the three meta columns are
+     capped so the Name column always has room to show file names. */
+  .dl-table col.dl-col-name{ width:auto; }
+  .dl-table col.dl-col-type{ width:96px; }
+  .dl-table col.dl-col-modified{ width:104px; }
+  .dl-table col.dl-col-size{ width:78px; }
   .dl-table thead th{
     position:sticky; top:0; background:var(--dl-surface); z-index:1;
     text-align:left; font-weight:600; font-size:11px; text-transform:uppercase; letter-spacing:.04em;
     color:var(--dl-text-muted); padding:7px 10px; border-bottom:1px solid var(--dl-border);
-    cursor:pointer; white-space:nowrap;
+    cursor:pointer; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;
   }
   .dl-table thead th:hover{ color:var(--dl-text); }
   .dl-table thead th .dl-sort-arrow{ margin-left:4px; opacity:.6; font-size:10px; }
   .dl-table tbody tr{ cursor:pointer; }
   .dl-table tbody tr:hover{ background:#f5f6f8; }
   .dl-table tbody tr.is-selected{ background:var(--dl-accent-soft); }
-  .dl-table td{ padding:6px 10px; border-bottom:1px solid #eef0f3; white-space:nowrap; }
-  .dl-cell-name{ display:flex; align-items:center; gap:8px; max-width:1px; width:100%; }
-  .dl-cell-name span{ overflow:hidden; text-overflow:ellipsis; }
+  .dl-table td{ padding:6px 10px; border-bottom:1px solid #eef0f3; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .dl-cell-name{ display:flex; align-items:center; gap:8px; min-width:0; }
+  .dl-cell-name span{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .dl-cell-meta{ color:var(--dl-text-muted); font-family:var(--dl-mono); font-size:11.5px; }
 
   /* -------------------------- Preview pane -------------------------- */
@@ -296,6 +302,63 @@
   .dl-connect-card h2{ font-size:16px; margin:0 0 6px; letter-spacing:-0.01em; }
   .dl-connect-card p{ font-size:13px; color:var(--dl-text-muted); margin:0 0 18px; line-height:1.55; }
 
+  /* -------------------------- Phase 2: context menu -------------------------- */
+  .dl-ctxmenu{
+    position:fixed; z-index:100; min-width:170px;
+    background:var(--dl-surface); border:1px solid var(--dl-border); border-radius:var(--dl-radius);
+    box-shadow:var(--dl-shadow-lg); padding:4px; font-size:13px;
+  }
+  .dl-ctxmenu-item{
+    display:flex; align-items:center; gap:9px; padding:7px 10px; border-radius:4px; cursor:pointer; color:var(--dl-text);
+  }
+  .dl-ctxmenu-item:hover{ background:var(--dl-accent-soft); }
+  .dl-ctxmenu-item.is-danger{ color:var(--dl-danger); }
+  .dl-ctxmenu-item.is-danger:hover{ background:var(--dl-danger-soft); }
+  .dl-ctxmenu-sep{ height:1px; background:var(--dl-border); margin:4px 0; }
+  .dl-ctxmenu-item svg{ flex:none; opacity:.7; }
+
+  /* -------------------------- Phase 2: action toolbar in list pane -------------------------- */
+  .dl-action-btn{ display:inline-flex; align-items:center; gap:5px; padding:5px 9px; font-size:12px; }
+  .dl-action-btn svg{ flex:none; }
+
+  /* -------------------------- Phase 2: modal dialogs -------------------------- */
+  .dl-modal-overlay{
+    position:absolute; inset:0; background:rgba(20,22,28,0.5); z-index:80;
+    display:flex; align-items:center; justify-content:center; animation:dl-fade .12s ease;
+  }
+  .dl-modal{
+    width:440px; max-width:92%; background:var(--dl-surface); border-radius:var(--dl-radius-lg);
+    box-shadow:var(--dl-shadow-lg); overflow:hidden; display:flex; flex-direction:column; max-height:80%;
+  }
+  .dl-modal-header{ padding:14px 18px; border-bottom:1px solid var(--dl-border); font-weight:600; font-size:14.5px; }
+  .dl-modal-body{ padding:16px 18px; overflow-y:auto; font-size:13px; color:var(--dl-text); }
+  .dl-modal-body label{ display:block; font-size:12px; font-weight:600; color:var(--dl-text-muted); margin-bottom:5px; }
+  .dl-modal-body input[type=text]{
+    width:100%; padding:8px 10px; border:1px solid var(--dl-border-strong); border-radius:var(--dl-radius);
+    font-size:13px; box-sizing:border-box;
+  }
+  .dl-modal-footer{ padding:12px 18px; border-top:1px solid var(--dl-border); display:flex; justify-content:flex-end; gap:8px; }
+  .dl-modal-error{ color:var(--dl-danger); font-size:12px; margin-top:8px; display:none; }
+  .dl-btn-danger{ background:var(--dl-danger); border-color:var(--dl-danger); color:#fff; }
+  .dl-btn-danger:hover{ background:#a52828; border-color:#a52828; }
+
+  /* Folder picker tree inside move/copy dialog */
+  .dl-picker{ border:1px solid var(--dl-border); border-radius:var(--dl-radius); max-height:240px; overflow:auto; padding:4px; margin-top:6px; }
+  .dl-picker-row{ display:flex; align-items:center; gap:5px; padding:5px 6px; border-radius:4px; cursor:pointer; white-space:nowrap; }
+  .dl-picker-row:hover{ background:#eef0f3; }
+  .dl-picker-row.is-selected{ background:var(--dl-accent-soft); font-weight:600; }
+  .dl-picker-caret{ width:14px; display:flex; justify-content:center; color:var(--dl-text-faint); cursor:pointer; transition:transform .12s; }
+  .dl-picker-caret.is-expanded{ transform:rotate(90deg); }
+  .dl-picker-caret.is-empty{ visibility:hidden; }
+  .dl-picker-children{ margin-left:16px; }
+
+  .dl-toast{
+    position:absolute; bottom:16px; left:50%; transform:translateX(-50%);
+    background:#1b1f24; color:#fff; padding:9px 16px; border-radius:var(--dl-radius); font-size:12.5px;
+    box-shadow:var(--dl-shadow-lg); z-index:120; animation:dl-fade .15s ease; max-width:80%;
+  }
+  .dl-toast.is-error{ background:var(--dl-danger); }
+
   .dl-visually-hidden{ position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); }
   .dl-root [data-focus-visible-only]:focus{ outline:none; }
   .dl-root button:focus-visible, .dl-root [tabindex]:focus-visible{ outline:2px solid var(--dl-accent); outline-offset:1px; }
@@ -320,6 +383,7 @@
     <div class="dl-toolbar-spacer"></div>
 
     <button class="dl-btn dl-btn-sm dl-btn-ghost" id="dlCollapseTreeBtn" title="Collapse folder tree">Collapse tree</button>
+    <button class="dl-btn dl-btn-sm dl-btn-ghost" id="dlCollapseListBtn" title="Collapse files list">Collapse files</button>
     <button class="dl-btn dl-btn-sm dl-btn-ghost" id="dlCollapsePreviewBtn" title="Collapse preview">Collapse preview</button>
 
     <div class="dl-conn-pill" id="dlConnPill">
@@ -342,7 +406,7 @@
       <div class="dl-connect-card">
         <svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="#9aa1ac" stroke-width="1.5"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/></svg>
         <h2>No Google Drive connected</h2>
-        <p>Connect your Google Drive to browse folders and preview files here. Read-only access — nothing is uploaded, moved, or deleted in this version.</p>
+        <p>Connect your Google Drive to browse, preview, and organize your files — create folders, rename, move, copy, and delete.</p>
 
         <!-- Client ID setup form: shown when no Client ID is saved yet -->
         <div id="dlClientIdSetup" style="display:none; text-align:left; margin-bottom:16px;">
@@ -363,7 +427,15 @@
 
     <!-- Three-pane layout -->
     <div class="dl-pane dl-pane-tree" id="dlPaneTree" style="display:none;">
-      <div class="dl-pane-header">Folders<div class="dl-toolbar-spacer"></div></div>
+      <div class="dl-pane-header">
+        Folders
+        <div class="dl-toolbar-spacer"></div>
+        <div class="dl-tooltip-wrap" data-tip="Collapse">
+          <button class="dl-btn dl-btn-icon dl-btn-ghost" id="dlTreeCollapseInline" style="width:24px;height:24px;padding:4px;">
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m15 18-6-6 6-6"/></svg>
+          </button>
+        </div>
+      </div>
       <div class="dl-pane-body dl-scroll" id="dlTreeBody">
         <div class="dl-tree" id="dlTree"></div>
       </div>
@@ -376,6 +448,11 @@
         <div class="dl-search">
           <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>
           <input type="text" id="dlSearchInput" placeholder="Search this folder">
+        </div>
+        <div class="dl-tooltip-wrap" data-tip="New folder">
+          <button class="dl-btn dl-btn-icon dl-btn-ghost" id="dlNewFolderBtn">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z"/><path d="M12 11v4M10 13h4"/></svg>
+          </button>
         </div>
         <div class="dl-tooltip-wrap" data-tip="Refresh folder">
           <button class="dl-btn dl-btn-icon dl-btn-ghost" id="dlListRefreshBtn">
@@ -399,6 +476,8 @@
       </div>
       <div class="dl-preview-body" id="dlPreviewBody"></div>
     </div>
+
+    <!-- Collapsed-pane restore rail: shows buttons to reopen collapsed panes -->
   </div>
 </div>
 
@@ -421,7 +500,10 @@ const CONFIG = {
   // Minimum scope for full "browse My Drive + preview anything" per spec
   // section 24. See the accompanying OAuth Setup Guide for the tradeoffs
   // of this scope vs. the narrower drive.file scope.
-  DRIVE_SCOPE: "https://www.googleapis.com/auth/drive.readonly",
+  // Phase 2: read-WRITE scope so the app can create folders, rename, move,
+  // copy, and delete. This is broader than drive.readonly — Google will ask
+  // the user to re-consent to the wider permission on next connect.
+  DRIVE_SCOPE: "https://www.googleapis.com/auth/drive",
   DRIVE_API_BASE: "https://www.googleapis.com/drive/v3",
   CACHE_TTL_MS: 5 * 60 * 1000,       // folder/file metadata cache lifetime
   PAGE_SIZE: 100
@@ -701,7 +783,64 @@ const GoogleDriveService = (function(){
     return res.blob();
   }
 
-  return { listChildren, listAllChildren, getFileMetadata, getFolderName, getParentChain, downloadBlob };
+  // ---- Phase 2: write operations ----
+  async function apiMutate(path, method, body, params){
+    const token = await GoogleAuth.getToken();
+    const url = new URL(CONFIG.DRIVE_API_BASE + path);
+    Object.entries(params || {}).forEach(([k,v]) => { if (v !== undefined) url.searchParams.set(k, v); });
+    const res = await fetch(url.toString(), {
+      method,
+      headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+      body: body ? JSON.stringify(body) : undefined
+    });
+    if (!res.ok){
+      const err = new Error("drive_api_error");
+      err.status = res.status;
+      try { err.body = await res.json(); } catch(e){}
+      throw err;
+    }
+    // DELETE returns empty body
+    if (res.status === 204) return {};
+    return res.json();
+  }
+
+  async function createFolder(parentId, name){
+    return apiMutate("/files", "POST", {
+      name,
+      mimeType: "application/vnd.google-apps.folder",
+      parents: [parentId]
+    }, { fields: "id,name,mimeType,parents,modifiedTime" });
+  }
+
+  async function renameFile(fileId, newName){
+    return apiMutate(`/files/${fileId}`, "PATCH", { name: newName }, { fields: "id,name" });
+  }
+
+  async function deleteFile(fileId){
+    // Move to trash rather than permanent delete — safer, recoverable in Drive.
+    return apiMutate(`/files/${fileId}`, "PATCH", { trashed: true }, { fields: "id,trashed" });
+  }
+
+  async function copyFile(fileId, newParentId, newName){
+    const body = {};
+    if (newParentId) body.parents = [newParentId];
+    if (newName) body.name = newName;
+    return apiMutate(`/files/${fileId}/copy`, "POST", body, { fields: "id,name,parents" });
+  }
+
+  async function moveFile(fileId, newParentId, oldParentId){
+    // Drive move = add new parent, remove old parent, in one PATCH.
+    return apiMutate(`/files/${fileId}`, "PATCH", null, {
+      addParents: newParentId,
+      removeParents: oldParentId,
+      fields: "id,name,parents"
+    });
+  }
+
+  return {
+    listChildren, listAllChildren, getFileMetadata, getFolderName, getParentChain, downloadBlob,
+    createFolder, renameFile, deleteFile, copyFile, moveFile
+  };
 })();
 
 /* =========================================================================
@@ -930,7 +1069,10 @@ const els = {
   previewActions: document.getElementById("dlPreviewActions"),
   previewBody: document.getElementById("dlPreviewBody"),
   collapseTreeBtn: document.getElementById("dlCollapseTreeBtn"),
+  collapseListBtn: document.getElementById("dlCollapseListBtn"),
   collapsePreviewBtn: document.getElementById("dlCollapsePreviewBtn"),
+  treeCollapseInline: document.getElementById("dlTreeCollapseInline"),
+  newFolderBtn: document.getElementById("dlNewFolderBtn"),
   workspace: document.getElementById("dlWorkspace"),
   root: document.getElementById("dlRoot"),
   clientIdSetup: document.getElementById("dlClientIdSetup"),
@@ -950,6 +1092,7 @@ const state = {
   searchTerm: "",
   currentFolderItems: { folders: [], files: [] },
   isTreeCollapsed: false,
+  isListCollapsed: false,
   isPreviewCollapsed: false
 };
 
@@ -1181,6 +1324,12 @@ function renderListTable(){
   table.className = "dl-table";
   const sortArrow = (col) => state.listSort.column === col ? `<span class="dl-sort-arrow">${state.listSort.dir === "asc" ? "\u25B2" : "\u25BC"}</span>` : "";
   table.innerHTML = `
+    <colgroup>
+      <col class="dl-col-name">
+      <col class="dl-col-type">
+      <col class="dl-col-modified">
+      <col class="dl-col-size">
+    </colgroup>
     <thead><tr>
       <th data-col="name">Name${sortArrow("name")}</th>
       <th data-col="type">Type${sortArrow("type")}</th>
@@ -1215,6 +1364,13 @@ function renderListTable(){
     tr.addEventListener("dblclick", () => {
       if (item.__isFolder) selectFolder(item.id, item.name);
       else selectFile(item);
+    });
+    tr.addEventListener("contextmenu", (e) => {
+      e.preventDefault();
+      tbody.querySelectorAll("tr.is-selected").forEach(r => r.classList.remove("is-selected"));
+      tr.classList.add("is-selected");
+      if (!item.__isFolder) selectFile(item);
+      openContextMenu(e.clientX, e.clientY, item);
     });
     tbody.appendChild(tr);
   });
@@ -1336,20 +1492,27 @@ function handlePossibleAuthError(err){
   }
 }
 
-/* ---------------------- Pane collapse ---------------------- */
-els.collapseTreeBtn.addEventListener("click", () => {
-  state.isTreeCollapsed = !state.isTreeCollapsed;
+/* ---------------------- Pane collapse (all three panes) ---------------------- */
+function applyPaneLayout(){
+  // Tree
   els.paneTree.classList.toggle("is-collapsed", state.isTreeCollapsed);
   els.splitterA.style.display = state.isTreeCollapsed ? "none" : "";
   els.collapseTreeBtn.textContent = state.isTreeCollapsed ? "Show tree" : "Collapse tree";
-});
-els.collapsePreviewBtn.addEventListener("click", () => {
-  state.isPreviewCollapsed = !state.isPreviewCollapsed;
+  // List / files
+  els.paneList.classList.toggle("is-collapsed", state.isListCollapsed);
+  els.collapseListBtn.textContent = state.isListCollapsed ? "Show files" : "Collapse files";
+  // Preview
   els.panePreview.classList.toggle("is-collapsed", state.isPreviewCollapsed);
-  els.splitterB.style.display = state.isPreviewCollapsed ? "none" : "";
+  els.splitterB.style.display = (state.isPreviewCollapsed || state.isListCollapsed) ? "none" : "";
   els.collapsePreviewBtn.textContent = state.isPreviewCollapsed ? "Show preview" : "Collapse preview";
-  if (state.isPreviewCollapsed) els.paneList.style.flex = "1 1 auto";
-});
+  // Whichever visible pane should grow to fill: prefer list, else preview.
+  if (!state.isListCollapsed) els.paneList.style.flex = state.isPreviewCollapsed ? "1 1 auto" : "0 0 auto";
+  else els.paneList.style.flex = "0 0 auto";
+}
+els.collapseTreeBtn.addEventListener("click", () => { state.isTreeCollapsed = !state.isTreeCollapsed; applyPaneLayout(); });
+els.treeCollapseInline.addEventListener("click", () => { state.isTreeCollapsed = true; applyPaneLayout(); });
+els.collapseListBtn.addEventListener("click", () => { state.isListCollapsed = !state.isListCollapsed; applyPaneLayout(); });
+els.collapsePreviewBtn.addEventListener("click", () => { state.isPreviewCollapsed = !state.isPreviewCollapsed; applyPaneLayout(); });
 
 /* ---------------------- Resizable splitters ---------------------- */
 function makeResizable(splitter, leftPane){
@@ -1417,6 +1580,7 @@ async function handleConnectClick(){
     setConnectionUI("connected");
     showWorkspace(true);
     await restorePaneWidths();
+    applyPaneLayout();
     await initTree();
     await selectFolder("root", "My Drive");
   } catch(e){
@@ -1488,6 +1652,231 @@ async function restorePaneWidths(){
   const viewMode = await DocumentLibraryDB.getSetting("viewMode", "list");
   state.listViewMode = viewMode;
 }
+
+/* =========================================================================
+   8b. Phase 2 — file operations (create folder, rename, delete, copy, move)
+========================================================================= */
+
+/* ---- Toast ---- */
+let toastTimer = null;
+function showToast(msg, isError){
+  const existing = els.workspace.querySelector(".dl-toast");
+  if (existing) existing.remove();
+  const t = document.createElement("div");
+  t.className = "dl-toast" + (isError ? " is-error" : "");
+  t.textContent = msg;
+  els.workspace.appendChild(t);
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.remove(), 3200);
+}
+
+/* ---- Context menu ---- */
+let ctxMenuEl = null;
+function closeContextMenu(){ if (ctxMenuEl){ ctxMenuEl.remove(); ctxMenuEl = null; } }
+document.addEventListener("click", closeContextMenu);
+document.addEventListener("scroll", closeContextMenu, true);
+
+function openContextMenu(x, y, item){
+  closeContextMenu();
+  const menu = document.createElement("div");
+  menu.className = "dl-ctxmenu";
+  const ico = (p) => `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">${p}</svg>`;
+  menu.innerHTML = `
+    <div class="dl-ctxmenu-item" data-act="rename">${ico('<path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z"/>')}Rename</div>
+    <div class="dl-ctxmenu-item" data-act="copy">${ico('<rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/>')}Copy to\u2026</div>
+    <div class="dl-ctxmenu-item" data-act="move">${ico('<path d="M5 12h14"/><path d="m12 5 7 7-7 7"/>')}Move to\u2026</div>
+    <div class="dl-ctxmenu-sep"></div>
+    <div class="dl-ctxmenu-item is-danger" data-act="delete">${ico('<path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>')}Delete</div>
+  `;
+  menu.style.left = Math.min(x, window.innerWidth - 190) + "px";
+  menu.style.top = Math.min(y, window.innerHeight - 200) + "px";
+  menu.addEventListener("click", (e) => {
+    const act = e.target.closest(".dl-ctxmenu-item")?.dataset.act;
+    closeContextMenu();
+    if (act === "rename") openRenameDialog(item);
+    else if (act === "delete") openDeleteDialog(item);
+    else if (act === "copy") openPickerDialog(item, "copy");
+    else if (act === "move") openPickerDialog(item, "move");
+  });
+  document.body.appendChild(menu);
+  ctxMenuEl = menu;
+}
+
+/* ---- Generic modal builder ---- */
+function buildModal({ title, bodyHtml, confirmLabel, confirmClass, onConfirm }){
+  const overlay = document.createElement("div");
+  overlay.className = "dl-modal-overlay";
+  overlay.innerHTML = `
+    <div class="dl-modal">
+      <div class="dl-modal-header">${escapeHtml(title)}</div>
+      <div class="dl-modal-body">${bodyHtml}<div class="dl-modal-error" id="dlModalError"></div></div>
+      <div class="dl-modal-footer">
+        <button class="dl-btn" id="dlModalCancel">Cancel</button>
+        <button class="dl-btn ${confirmClass || 'dl-btn-primary'}" id="dlModalConfirm">${escapeHtml(confirmLabel)}</button>
+      </div>
+    </div>
+  `;
+  els.workspace.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector("#dlModalCancel").addEventListener("click", close);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) close(); });
+  const errEl = overlay.querySelector("#dlModalError");
+  const confirmBtn = overlay.querySelector("#dlModalConfirm");
+  const showErr = (m) => { errEl.textContent = m; errEl.style.display = "block"; };
+  const setBusy = (b) => { confirmBtn.disabled = b; confirmBtn.textContent = b ? "Working\u2026" : confirmLabel; };
+  confirmBtn.addEventListener("click", () => onConfirm({ overlay, close, showErr, setBusy }));
+  const escFn = (e) => { if (e.key === "Escape"){ close(); document.removeEventListener("keydown", escFn); } };
+  document.addEventListener("keydown", escFn);
+  return overlay;
+}
+
+async function afterMutation(msg){
+  showToast(msg);
+  // Invalidate cache for this folder and refresh both list and tree.
+  await renderFolderContents(state.currentFolderId, true);
+  await initTree();
+}
+
+/* ---- New folder ---- */
+function openNewFolderDialog(){
+  buildModal({
+    title: "New folder",
+    bodyHtml: `<label>Folder name</label><input type="text" id="dlNewFolderName" placeholder="Untitled folder" value="Untitled folder">`,
+    confirmLabel: "Create",
+    onConfirm: async ({ close, showErr, setBusy }) => {
+      const name = document.getElementById("dlNewFolderName").value.trim();
+      if (!name) return showErr("Please enter a folder name.");
+      setBusy(true);
+      try{
+        await GoogleDriveService.createFolder(state.currentFolderId, name);
+        close();
+        await afterMutation(`Created folder \u201c${name}\u201d`);
+      } catch(e){ setBusy(false); showErr(mapErrorTitle(e)); handlePossibleAuthError(e); }
+    }
+  });
+  setTimeout(() => { const i = document.getElementById("dlNewFolderName"); if (i){ i.focus(); i.select(); } }, 50);
+}
+
+/* ---- Rename ---- */
+function openRenameDialog(item){
+  buildModal({
+    title: `Rename ${item.__isFolder ? "folder" : "file"}`,
+    bodyHtml: `<label>New name</label><input type="text" id="dlRenameInput">`,
+    confirmLabel: "Rename",
+    onConfirm: async ({ close, showErr, setBusy }) => {
+      const name = document.getElementById("dlRenameInput").value.trim();
+      if (!name) return showErr("Please enter a name.");
+      setBusy(true);
+      try{
+        await GoogleDriveService.renameFile(item.id, name);
+        close();
+        await afterMutation(`Renamed to \u201c${name}\u201d`);
+      } catch(e){ setBusy(false); showErr(mapErrorTitle(e)); handlePossibleAuthError(e); }
+    }
+  });
+  setTimeout(() => { const i = document.getElementById("dlRenameInput"); if (i){ i.value = item.name; i.focus(); i.select(); } }, 50);
+}
+
+/* ---- Delete (to trash) ---- */
+function openDeleteDialog(item){
+  buildModal({
+    title: `Delete ${item.__isFolder ? "folder" : "file"}?`,
+    bodyHtml: `<p style="margin:0;">\u201c${escapeHtml(item.name)}\u201d will be moved to your Google Drive trash. You can restore it from Drive within 30 days.</p>`,
+    confirmLabel: "Delete",
+    confirmClass: "dl-btn-danger",
+    onConfirm: async ({ close, showErr, setBusy }) => {
+      setBusy(true);
+      try{
+        await GoogleDriveService.deleteFile(item.id);
+        close();
+        if (state.selectedFile && (state.selectedFile.id === item.id || state.selectedFile.fileId === item.id)) renderPreviewEmpty();
+        await afterMutation(`Moved \u201c${item.name}\u201d to trash`);
+      } catch(e){ setBusy(false); showErr(mapErrorTitle(e)); handlePossibleAuthError(e); }
+    }
+  });
+}
+
+/* ---- Copy / Move (with folder picker) ---- */
+function openPickerDialog(item, mode){
+  const pickerBody = `
+    <p style="margin:0 0 8px;">Choose a destination folder for \u201c${escapeHtml(item.name)}\u201d:</p>
+    <div class="dl-picker" id="dlPicker"></div>
+  `;
+  const overlay = buildModal({
+    title: mode === "copy" ? "Copy to folder" : "Move to folder",
+    bodyHtml: pickerBody,
+    confirmLabel: mode === "copy" ? "Copy here" : "Move here",
+    onConfirm: async ({ close, showErr, setBusy }) => {
+      if (!pickerState.selectedId) return showErr("Please select a destination folder.");
+      setBusy(true);
+      try{
+        if (mode === "copy"){
+          await GoogleDriveService.copyFile(item.id, pickerState.selectedId, null);
+          close();
+          await afterMutation(`Copied \u201c${item.name}\u201d`);
+        } else {
+          await GoogleDriveService.moveFile(item.id, pickerState.selectedId, state.currentFolderId);
+          close();
+          if (state.selectedFile && (state.selectedFile.id === item.id)) renderPreviewEmpty();
+          await afterMutation(`Moved \u201c${item.name}\u201d`);
+        }
+      } catch(e){ setBusy(false); showErr(mapErrorTitle(e)); handlePossibleAuthError(e); }
+    }
+  });
+  const pickerState = { selectedId: null };
+  const pickerRoot = overlay.querySelector("#dlPicker");
+  renderPickerNode(pickerRoot, { id: "root", name: "My Drive" }, 0, pickerState, overlay);
+}
+
+function renderPickerNode(container, folder, depth, pickerState, overlay){
+  const wrap = document.createElement("div");
+  const row = document.createElement("div");
+  row.className = "dl-picker-row";
+  row.style.paddingLeft = (6 + depth * 4) + "px";
+  const caret = document.createElement("span");
+  caret.className = "dl-picker-caret";
+  caret.innerHTML = `<svg width="9" height="9" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>`;
+  const icon = document.createElement("span");
+  icon.innerHTML = fileIconSvg("application/vnd.google-apps.folder", 14);
+  const label = document.createElement("span");
+  label.textContent = folder.name;
+  label.style.overflow = "hidden"; label.style.textOverflow = "ellipsis";
+  row.appendChild(caret); row.appendChild(icon); row.appendChild(label);
+  wrap.appendChild(row);
+  const childSlot = document.createElement("div");
+  childSlot.className = "dl-picker-children";
+  childSlot.style.display = "none";
+  wrap.appendChild(childSlot);
+  container.appendChild(wrap);
+
+  let expanded = false, loaded = false;
+  async function toggle(){
+    expanded = !expanded;
+    caret.classList.toggle("is-expanded", expanded);
+    childSlot.style.display = expanded ? "" : "none";
+    if (expanded && !loaded){
+      loaded = true;
+      childSlot.innerHTML = `<div class="dl-tree-loading" style="padding-left:20px;"><span class="dl-spinner"></span> Loading\u2026</div>`;
+      try{
+        const { folders } = await getChildrenCachedOrLive(folder.id);
+        childSlot.innerHTML = "";
+        if (!folders.length){ caret.classList.add("is-empty"); }
+        folders.forEach(f => renderPickerNode(childSlot, { id: f.folderId, name: f.name }, depth + 1, pickerState, overlay));
+      } catch(e){ childSlot.innerHTML = `<div class="dl-tree-loading" style="color:var(--dl-danger); padding-left:20px;">${mapErrorTitle(e)}</div>`; }
+    }
+  }
+  caret.addEventListener("click", (e) => { e.stopPropagation(); toggle(); });
+  row.addEventListener("click", () => {
+    overlay.querySelectorAll(".dl-picker-row.is-selected").forEach(r => r.classList.remove("is-selected"));
+    row.classList.add("is-selected");
+    pickerState.selectedId = folder.id;
+  });
+  // Auto-expand root
+  if (depth === 0) toggle();
+}
+
+/* ---- Wire up New Folder button ---- */
+els.newFolderBtn.addEventListener("click", openNewFolderDialog);
 
 /* =========================================================================
    9. Init
